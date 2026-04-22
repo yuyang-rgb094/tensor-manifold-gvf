@@ -1,14 +1,18 @@
-# Tensor Manifold GVF / 张量流形 GVF
+# Tensor Manifold-Based Graph-Vector Fusion / 张量流形图向量融合
 
 [English](#english) | [中文](#中文)
+
+> 📄 **Paper**: [Tensor Manifold-Based Graph-Vector Fusion for AI-Native Academic Literature Retrieval](https://arxiv.org/abs/2604.16416) (arXiv:2604.16416)
+>
+> 📥 [PDF](paper/2604.16416.pdf) | 💻 [GitHub Repository](https://github.com/yuyang-rgb094/tensor-manifold-gvf)
 
 ---
 
 <a id="english"></a>
 
-## Tensor Manifold GVF
+## Tensor Manifold-Based Graph-Vector Fusion (TMGVF)
 
-A unified retrieval framework for academic knowledge graphs that combines **tensor manifold embeddings**, **Grassmann vector fields (GVF)**, and **CP/Tucker decomposition** for multi-aspect scholarly document search.
+A Python implementation of the **Tensor Manifold-Based Graph-Vector Fusion** framework for AI-native academic literature retrieval, based on the theoretical foundation that academic literature graphs are discrete projections of tensor manifolds. This project unifies text vectors and graph topology into the same geometric space, supporting heterogeneous node types (papers, authors, journals, institutions, disciplines, projects) and multiple edge types (citations, collaborations, affiliations).
 
 ### Features
 
@@ -202,9 +206,9 @@ MIT License
 
 <a id="中文"></a>
 
-## 张量流形 GVF
+## 张量流形图向量融合 (TMGVF)
 
-一个面向学术知识图谱的统一检索框架，结合**张量流形嵌入**、**Grassmann 向量场 (GVF)** 和 **CP/Tucker 分解**实现多维度学术文档检索。
+基于论文 [Tensor Manifold-Based Graph-Vector Fusion for AI-Native Academic Literature Retrieval](https://arxiv.org/abs/2604.16416) (arXiv:2604.16416) 的 Python 实现。基于学术文献图是张量流形的离散投影这一理论基础，将文本向量和图拓扑统一到同一几何空间，支持论文、作者、期刊、机构、领域、项目等多类型异构节点，以及引用、合作、隶属等多种边类型。
 
 ### 特性
 
