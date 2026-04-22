@@ -1,0 +1,31 @@
+sbert:
+  model_name: "all-MiniLM-L6-v2"
+  batch_size: 128
+  max_length: 512
+  device: "cuda"
+
+signature:
+  walk_order_k: 3
+  lambda_topo: 0.4
+  mu_sem: 0.4
+  nu_temporal: 0.2
+  hodge_compensation: true
+
+encoder:
+  output_dim: 128
+  gate_param: 1.0
+
+index:
+  alpha_temporal: 0.3
+  density_threshold: 5.0
+  update_threshold: 10000
+  use_gpu: true
+  recall_factor: 5
+
+data:
+  node_types: ["paper", "author", "journal", "discipline", "institution", "project"]
+  edge_types: ["citation", "collaboration", "affiliation", "publishes_in", "belongs_to", "works_on", "funded_by"]
+
+retrieval:
+  default_top_k: 10
+  time_decay_alpha: 0.3

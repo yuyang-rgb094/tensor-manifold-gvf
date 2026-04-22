@@ -1,0 +1,21 @@
+[
+  {"source": "paper_001", "target": "paper_003", "type": "cites"},
+  {"source": "paper_001", "target": "paper_005", "type": "cites"},
+  {"source": "paper_002", "target": "paper_006", "type": "cites"},
+  {"source": "paper_003", "target": "paper_005", "type": "cites"},
+  {"source": "paper_003", "target": "paper_007", "type": "cites"},
+  {"source": "paper_004", "target": "paper_001", "type": "extends"},
+  {"source": "paper_004", "target": "paper_002", "type": "cites"},
+  {"source": "paper_004", "target": "paper_006", "type": "cites"},
+  {"source": "paper_005", "target": "paper_003", "type": "surveys"},
+  {"source": "paper_005", "target": "paper_007", "type": "surveys"},
+  {"source": "paper_007", "target": "paper_003", "type": "cites"},
+  {"source": "paper_007", "target": "paper_005", "type": "cites"},
+  {"source": "paper_007", "target": "paper_006", "type": "cites"},
+  {"source": "paper_008", "target": "paper_005", "type": "cites"},
+  {"source": "paper_008", "target": "paper_009", "type": "cites"},
+  {"source": "paper_009", "target": "paper_008", "type": "extends"},
+  {"source": "paper_010", "target": "paper_001", "type": "cites"},
+  {"source": "paper_010", "target": "paper_004", "type": "extends"},
+  {"source": "paper_010", "target": "paper_007", "type": "cites"}
+]

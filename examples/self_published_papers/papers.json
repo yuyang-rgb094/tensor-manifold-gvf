@@ -1,0 +1,102 @@
+[
+  {
+    "id": "paper_001",
+    "title": "Tensorized Graph Neural Networks for Multi-Relational Knowledge Graph Completion",
+    "abstract": "We propose a tensorized graph neural network that leverages CP decomposition to efficiently model multi-relational knowledge graphs. Our approach reduces the parameter count by an order of magnitude while maintaining competitive accuracy on standard link prediction benchmarks.",
+    "year": 2021,
+    "authors": ["Yifan Chen", "Michael Bronstein", "Jian Tang"],
+    "venue": "NeurIPS",
+    "keywords": ["knowledge graph", "tensor decomposition", "graph neural network", "link prediction"],
+    "references": ["paper_003", "paper_005"]
+  },
+  {
+    "id": "paper_002",
+    "title": "Grassmannian Manifold Optimization for Neural Network Training",
+    "abstract": "This paper introduces a novel optimization framework that constrains weight matrices to lie on the Grassmann manifold during neural network training. The resulting Grassmannian gradient descent algorithm demonstrates improved generalization on image classification tasks.",
+    "year": 2020,
+    "authors": ["Laura Scalerandi", "Suvrit Sra", "Andrea Montanari"],
+    "venue": "ICML",
+    "keywords": ["Grassmann manifold", "optimization", "neural networks", "Riemannian geometry"],
+    "references": ["paper_006"]
+  },
+  {
+    "id": "paper_003",
+    "title": "Low-Rank Tensor Methods for Scalable Knowledge Graph Embedding",
+    "abstract": "We present a scalable knowledge graph embedding method based on Tucker decomposition of the entity-relation tensor. Our approach achieves linear time complexity with respect to the number of entities and outperforms existing methods on large-scale benchmarks including Wikidata and Freebase.",
+    "year": 2020,
+    "authors": ["Baoxing Huai", "Zheng Zhang", "Yizhou Wang"],
+    "venue": "AAAI",
+    "keywords": ["knowledge graph embedding", "Tucker decomposition", "scalability", "tensor methods"],
+    "references": ["paper_005", "paper_007"]
+  },
+  {
+    "id": "paper_004",
+    "title": "Manifold-Regularized Attention Mechanisms for Graph Transformers",
+    "abstract": "We incorporate Riemannian manifold regularization into the attention computation of graph transformers. By constraining attention heads to the Grassmannian, we achieve more stable training and better performance on molecular property prediction tasks.",
+    "year": 2022,
+    "authors": ["Xiaohui Chen", "Jure Leskovec", "Stefanie Jegelka"],
+    "venue": "ICLR",
+    "keywords": ["graph transformer", "attention mechanism", "manifold regularization", "Grassmannian"],
+    "references": ["paper_001", "paper_002", "paper_006"]
+  },
+  {
+    "id": "paper_005",
+    "title": "A Survey of Tensor Decomposition Techniques in Machine Learning",
+    "abstract": "This survey provides a comprehensive overview of tensor decomposition methods including CP, Tucker, and tensor train decompositions. We discuss their applications in recommender systems, NLP, computer vision, and knowledge graph modeling, along with recent algorithmic advances.",
+    "year": 2021,
+    "authors": ["Evgeny Kharlamov", "Nikolay Malkov", "Yaruslan Akhtiamov"],
+    "venue": "ACM Computing Surveys",
+    "keywords": ["tensor decomposition", "survey", "machine learning", "CP decomposition", "Tucker decomposition"],
+    "references": ["paper_003", "paper_007"]
+  },
+  {
+    "id": "paper_006",
+    "title": "Riemannian Optimization for Deep Learning: A Geometric Perspective",
+    "abstract": "We provide a unified geometric framework for understanding optimization on matrix manifolds in deep learning. Our analysis covers Stiefel, Grassmann, and orthogonal manifolds, and introduces efficient retractions and vector transport operations for SGD variants.",
+    "year": 2020,
+    "authors": ["Jun-Kun Wang", "Jacob Mattingley", "Stephen Boyd"],
+    "venue": "JMLR",
+    "keywords": ["Riemannian optimization", "matrix manifolds", "deep learning", "Stiefel manifold"],
+    "references": []
+  },
+  {
+    "id": "paper_007",
+    "title": "Tensor Completion on Graph-Structured Data via Grassmannian Embeddings",
+    "abstract": "We propose a tensor completion method that leverages Grassmannian embeddings to capture the geometric structure of graph-structured data. Our approach combines spectral graph theory with tensor factorization to handle missing entries in knowledge graph tensors.",
+    "year": 2022,
+    "authors": ["Mingyuan Zhou", "Lawrence Carin", "David Dunson"],
+    "venue": "NeurIPS",
+    "keywords": ["tensor completion", "Grassmannian embedding", "graph-structured data", "spectral methods"],
+    "references": ["paper_003", "paper_005", "paper_006"]
+  },
+  {
+    "id": "paper_008",
+    "title": "Neural Tensor Networks with Adaptive Rank Selection for Information Retrieval",
+    "abstract": "We introduce an adaptive rank selection mechanism for neural tensor networks applied to information retrieval tasks. The model automatically determines the optimal tensor rank for each query-document pair, achieving state-of-the-art results on MS MARCO and TREC benchmarks.",
+    "year": 2023,
+    "authors": ["Wei Wang", "Jimmy Lin", "Gordon V. Cormack"],
+    "venue": "SIGIR",
+    "keywords": ["neural tensor networks", "information retrieval", "adaptive rank", "query-document matching"],
+    "references": ["paper_005", "paper_009"]
+  },
+  {
+    "id": "paper_009",
+    "title": "Dense Passage Retrieval with Manifold-Aware Semantic Matching",
+    "abstract": "We present a dense passage retrieval model that incorporates manifold-awareness into its semantic matching component. By projecting passage embeddings onto a learned Riemannian manifold, our model better captures the hierarchical structure of document collections.",
+    "year": 2023,
+    "authors": ["Omar Khattab", "Matei Zaharia", "Christopher Re"],
+    "venue": "ACL",
+    "keywords": ["dense retrieval", "semantic matching", "Riemannian manifold", "passage ranking"],
+    "references": ["paper_008"]
+  },
+  {
+    "id": "paper_010",
+    "title": "Hierarchical Tensor Graph Networks for Multi-Scale Molecular Property Prediction",
+    "abstract": "We propose a hierarchical tensor graph network that operates at multiple scales of molecular representation. The model uses tensor contraction to aggregate information across atomic, bond, and ring-level subgraphs, achieving improved accuracy on quantum chemistry benchmarks.",
+    "year": 2024,
+    "authors": ["Jianlin Su", "Yue Liu", "Shengding Hu"],
+    "venue": "ICML",
+    "keywords": ["molecular property prediction", "hierarchical graph networks", "tensor contraction", "multi-scale"],
+    "references": ["paper_001", "paper_004", "paper_007"]
+  }
+]
