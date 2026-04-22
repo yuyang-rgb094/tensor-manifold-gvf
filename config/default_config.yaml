@@ -1,9 +1,53 @@
-sbert:
+# ============================================================
+# Tensor Manifold GVF - Default Configuration
+# ============================================================
+
+# --- Encoder Configuration ---
+encoder:
+  type: "sentence_transformer"   # "sentence_transformer" or "sbert"
   model_name: "all-MiniLM-L6-v2"
   batch_size: 128
   max_length: 512
-  device: "cuda"
+  device: "cpu"                  # "cpu" or "cuda"
+  use_cache: true
 
+# --- Manifold Projection ---
+manifold:
+  mode: "truncate"               # "truncate" (backward-compat) or "learned"
+  semantic_dim: 384              # auto-detected from encoder
+  signature_dim: 64
+  hidden_dim: 128
+  output_dim: 64                 # manifold_dim
+  num_relations: 4
+
+# --- Index Configuration ---
+index:
+  type: "brute"                  # "faiss", "hnswlib", or "brute"
+  # FAISS-specific
+  faiss:
+    metric: "ip"                 # "ip" or "l2"
+    use_ivf_pq: false            # enable IVF+PQ for large datasets
+    nlist: 100
+    m_pq: 8
+    nbits: 8
+    nprobe: 10
+  # HNSWLIB-specific
+  hnswlib:
+    ef_construction: 200
+    M: 16
+    space: "ip"
+
+# --- Decomposer Configuration ---
+decomposer:
+  type: "cp"                     # "cp" or "tucker"
+  rank: 8
+
+# --- Retrieval Configuration ---
+retrieval:
+  default_top_k: 10
+  time_decay_alpha: 0.3
+
+# --- DEC / Diffusion Signature (core algorithms) ---
 signature:
   walk_order_k: 3
   lambda_topo: 0.4
@@ -11,21 +55,7 @@ signature:
   nu_temporal: 0.2
   hodge_compensation: true
 
-encoder:
-  output_dim: 128
-  gate_param: 1.0
-
-index:
-  alpha_temporal: 0.3
-  density_threshold: 5.0
-  update_threshold: 10000
-  use_gpu: true
-  recall_factor: 5
-
+# --- Data Schema ---
 data:
   node_types: ["paper", "author", "journal", "discipline", "institution", "project"]
   edge_types: ["citation", "collaboration", "affiliation", "publishes_in", "belongs_to", "works_on", "funded_by"]
-
-retrieval:
-  default_top_k: 10
-  time_decay_alpha: 0.3

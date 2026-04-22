@@ -7,6 +7,7 @@ into dense vector representations, with caching support.
 from __future__ import annotations
 
 import pickle
+import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -38,6 +39,12 @@ class SBERTEncoder:
             max_length: Maximum sequence length for tokenization.
             device: Device to run inference on ('cuda' or 'cpu').
         """
+        warnings.warn(
+            "models.sbert_encoder.SBERTEncoder is deprecated. "
+            "Use retrieval.encoders.SentenceTransformerEncoder instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.model_name = model_name
         self.batch_size = batch_size
         self.max_length = max_length

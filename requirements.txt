@@ -1,3 +1,4 @@
+# Core dependencies
 torch>=2.1.0
 transformers>=4.36.0
 sentence-transformers>=2.2.2
@@ -7,3 +8,7 @@ scipy>=1.11.0
 networkx>=3.2
 pyyaml>=6.0
 tqdm>=4.66.0
+
+# Optional dependencies
+hnswlib>=0.7.0              # hnswlib index backend
+# FlagEmbedding>=1.2.0      # BGE-M3 encoder (Chinese/multilingual support)

@@ -146,7 +146,7 @@ class HierarchicalManifoldEncoder(nn.Module):
         self.sem_proj = nn.Linear(semantic_dim, hidden_dim)
 
         # Gated residual fusion
-        self.gated_fusion = ManifoldGatedResidual(hidden_dim * 2, hidden_dim)
+        self.gated_fusion = ManifoldGatedResidual(hidden_dim, hidden_dim)
 
         # Relation-aware projection
         self.relation_proj = RelationAwareProjection(
