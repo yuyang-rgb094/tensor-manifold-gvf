@@ -177,7 +177,7 @@ class SentenceTransformerEncoder(EmbeddingEncoder):
         embeddings = self._model.encode(  # type: ignore[union-attr]
             texts,
             batch_size=self._batch_size,
-            show_progress_bar=False,
+            show_progress_bar=True,
             normalize_embeddings=True,
         )
         return np.asarray(embeddings, dtype=np.float32)

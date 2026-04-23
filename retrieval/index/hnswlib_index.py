@@ -39,12 +39,14 @@ class HNSWVectorIndex(VectorIndex):
     def __init__(
         self,
         ef_construction: int = 200,
+        ef_search: int = 128,
         M: int = 16,
         space: str = "ip",
     ) -> None:
         if space not in ("ip", "l2"):
             raise ValueError(f"space must be 'ip' or 'l2', got '{space}'")
         self._ef_construction = ef_construction
+        self._ef_search = ef_search
         self._M = M
         self._space = space
 
@@ -116,6 +118,15 @@ class HNSWVectorIndex(VectorIndex):
         if self._index is None:
             raise RuntimeError("Index has not been built. Call build() first.")
 
+        # Clamp top_k to available elements
+        actual_k = min(top_k, self._n_total)
+        if actual_k <= 0:
+            actual_k = 1
+
+        # Set ef_search to be at least actual_k, preferably larger
+        ef = max(self._ef_search, actual_k * 2)
+        self._index.set_ef(ef)
+
         single = query.ndim == 1
         if single:
             query = query.reshape(1, -1)
@@ -124,27 +135,25 @@ class HNSWVectorIndex(VectorIndex):
 
         # hnswlib returns (labels, distances); we swap to (scores, indices)
         # and negate distances for L2 so that higher = more similar.
-        all_indices = []
-        all_scores = []
+        labels, distances = self._index.knn_query(query, k=actual_k)
 
-        for q in query:
-            labels, distances = self._index.knn_query(q, k=top_k)
-            if self._space == "l2":
-                # Convert to similarity: negate so higher is better
-                scores = -distances
-            else:
-                scores = distances
-            all_indices.append(labels)
-            all_scores.append(scores)
+        if self._space == "l2":
+            # Convert to similarity: negate so higher is better
+            scores = -distances
+        else:
+            scores = distances
 
-        indices = np.array(all_indices)
-        scores = np.array(all_scores)
+        # Pad with -1 if we need more results than available
+        if actual_k < top_k:
+            pad_len = top_k - actual_k
+            labels = np.pad(labels, ((0, 0), (0, pad_len)), constant_values=-1)
+            scores = np.pad(scores, ((0, 0), (0, pad_len)), constant_values=-np.inf)
 
         if single:
             scores = scores[0]
-            indices = indices[0]
+            labels = labels[0]
 
-        return scores, indices
+        return scores, labels
 
     # ------------------------------------------------------------------
     # Incremental add

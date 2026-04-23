@@ -93,6 +93,10 @@ class UnifiedRetriever:
         decomposer_type: str = "cp",
         rank: int = 8,
         manifold_mode: str = "truncate",
+        ef_construction: int = 200,
+        ef_search: int = 128,
+        M: int = 16,
+        hnsw_space: str = "ip",
     ):
         """
         Parameters
@@ -113,8 +117,51 @@ class UnifiedRetriever:
             Rank for CP / Tucker decomposition.
         manifold_mode : str
             Manifold projection mode: ``"truncate"`` or ``"learned"``.
+        ef_construction : int
+            HNSW: beam width during index construction.
+        ef_search : int
+            HNSW: beam width during search.
+        M : int
+            HNSW: max connections per node.
         """
         if config is not None:
+            # Support both flat config structure and nested (default_config.yaml style)
+            encoder_config = config.get("encoder", {})
+            manifold_config = config.get("manifold", {})
+            index_config = config.get("index", {})
+            decomposer_config = config.get("decomposer", {})
+
+            # Extract encoder params
+            if encoder_config:
+                sbert_model = encoder_config.get("model_name", sbert_model)
+                embedding_dim = encoder_config.get("embedding_dim", embedding_dim)
+
+            # Extract manifold params
+            if manifold_config:
+                manifold_dim = manifold_config.get("output_dim", manifold_dim)
+                manifold_mode = manifold_config.get("mode", manifold_mode)
+
+            # Extract index params
+            if index_config:
+                index_type = index_config.get("type", index_type)
+                hnswlib_config = index_config.get("hnswlib", {})
+                if hnswlib_config:
+                    ef_construction = hnswlib_config.get("ef_construction", ef_construction)
+                    ef_search = hnswlib_config.get("ef_search", ef_search)
+                    M = hnswlib_config.get("M", M)
+                    hnsw_space = hnswlib_config.get("space", hnsw_space)
+                    # Also check index_config top-level
+                    if not ef_construction:
+                        ef_construction = index_config.get("ef_construction", ef_construction)
+                    if not M:
+                        M = index_config.get("M", M)
+
+            # Extract decomposer params
+            if decomposer_config:
+                decomposer_type = decomposer_config.get("type", decomposer_type)
+                rank = decomposer_config.get("rank", rank)
+
+            # Also support flat config structure for backward compatibility
             sbert_model = config.get("sbert_model", sbert_model)
             embedding_dim = config.get("embedding_dim", embedding_dim)
             manifold_dim = config.get("manifold_dim", manifold_dim)
@@ -122,6 +169,9 @@ class UnifiedRetriever:
             decomposer_type = config.get("decomposer_type", decomposer_type)
             rank = config.get("rank", rank)
             manifold_mode = config.get("manifold_mode", manifold_mode)
+            ef_construction = config.get("ef_construction", ef_construction)
+            ef_search = config.get("ef_search", ef_search)
+            M = config.get("M", M)
 
         self.sbert_model = sbert_model or self.DEFAULT_SBERT_MODEL
         self.embedding_dim = embedding_dim
@@ -130,6 +180,13 @@ class UnifiedRetriever:
         self.decomposer_type = decomposer_type
         self.rank = rank
         self.manifold_mode = manifold_mode
+        self.ef_construction = ef_construction
+        self.ef_search = ef_search
+        self.M = M
+        self.hnsw_space = hnsw_space
+
+        # Store full config for reference
+        self._config = config
 
         # ------------------------------------------------------------------
         # Pipeline components (populated by build / _init_components)
@@ -513,6 +570,11 @@ class UnifiedRetriever:
                 "max_length": 512,
                 "use_cache": True,
             }
+            # If we have a full config, use encoder config from there
+            if hasattr(self, '_config') and self._config:
+                cfg_encoder = self._config.get("encoder", {})
+                if cfg_encoder:
+                    encoder_config.update(cfg_encoder)
             self._encoder = create_encoder(encoder_config)
 
         # Signature builder
@@ -523,15 +585,30 @@ class UnifiedRetriever:
 
         # Manifold projector
         if self._projector is None:
-            self._projector = ManifoldProjector(
-                mode=self.manifold_mode,
-                semantic_dim=self.embedding_dim,
-                output_dim=self.manifold_dim,
-            )
+            projector_kwargs = {
+                "mode": self.manifold_mode,
+                "semantic_dim": self.embedding_dim,
+                "output_dim": self.manifold_dim,
+            }
+            # Add additional params from config if available
+            if hasattr(self, '_config') and self._config:
+                manifold_config = self._config.get("manifold", {})
+                if manifold_config:
+                    projector_kwargs["signature_dim"] = manifold_config.get("signature_dim", 64)
+                    projector_kwargs["hidden_dim"] = manifold_config.get("hidden_dim", 128)
+                    projector_kwargs["num_relations"] = manifold_config.get("num_relations", 4)
+            self._projector = ManifoldProjector(**projector_kwargs)
 
         # Vector index
         if self._index is None:
-            self._index = create_index(self.index_type)
+            index_kwargs = {}
+            if self.index_type == "hnswlib":
+                # Extract HNSW-specific params from config
+                index_kwargs["ef_construction"] = getattr(self, "ef_construction", 200)
+                index_kwargs["ef_search"] = getattr(self, "ef_search", 128)
+                index_kwargs["M"] = getattr(self, "M", 16)
+                index_kwargs["space"] = getattr(self, "hnsw_space", "ip")
+            self._index = create_index(self.index_type, **index_kwargs)
 
         # Tensor decomposer
         if self._decomposer is None:
