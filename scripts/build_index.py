@@ -201,7 +201,14 @@ def main():
         "--output", "-o",
         type=str,
         default=None,
-        help="Path to save the built retriever state (JSON)",
+        help="Path to save the built retriever state",
+    )
+    parser.add_argument(
+        "--output-format",
+        type=str,
+        default="auto",
+        choices=["auto", "json", "dir"],
+        help="Output format: 'auto' (default, chooses dir for >10k docs), 'json', or 'dir'",
     )
     parser.add_argument(
         "--query", "-q",
@@ -359,8 +366,19 @@ def main():
 
     # Save state
     if args.output:
-        retriever.to_json(args.output)
-        print(f"  Saved to:          {args.output}")
+        # Choose format based on size or user choice
+        use_dir_format = False
+        if args.output_format == "dir":
+            use_dir_format = True
+        elif args.output_format == "auto" and len(retriever) > 10000:
+            use_dir_format = True
+
+        if use_dir_format:
+            retriever.save(args.output)
+            print(f"  Saved to:          {args.output}/ (directory format)")
+        else:
+            retriever.to_json(args.output)
+            print(f"  Saved to:          {args.output}")
 
     # Demo query
     if not args.no_demo:

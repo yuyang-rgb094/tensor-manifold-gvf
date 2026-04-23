@@ -9,6 +9,7 @@ library.  If ``hnswlib`` is not installed, :meth:`build` raises
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Optional, Tuple
 
 import numpy as np
@@ -187,13 +188,19 @@ class HNSWVectorIndex(VectorIndex):
         """Save the HNSW index to disk.
 
         Args:
-            path: Destination file path.
+            path: Destination file path or directory.
+                  If directory, saves as "hnsw_index.bin within it.
 
         Raises:
             RuntimeError: If the index has not been built yet.
         """
         if self._index is None:
             raise RuntimeError("Index has not been built. Call build() first.")
+        path_obj = Path(path)
+        if path_obj.is_dir():
+            path_obj = str(path_obj / "hnsw_index.bin")
+        else:
+            path_obj.parent.mkdir(parents=True, exist_ok=True)
         self._index.save_index(path)
         logger.info("Saved HNSW index to %s", path)
 
@@ -201,7 +208,8 @@ class HNSWVectorIndex(VectorIndex):
         """Load an HNSW index from disk.
 
         Args:
-            path: Source file path.
+            path: Source file path or directory.
+                  If directory, loads "hnsw_index.bin" within it.
 
         Raises:
             ImportError: If ``hnswlib`` is not installed.
@@ -210,6 +218,11 @@ class HNSWVectorIndex(VectorIndex):
             raise ImportError(
                 "hnswlib is not installed. Install with: pip install hnswlib"
             )
+        path_obj = Path(path)
+        if path_obj.is_dir():
+            candidate = path_obj / "hnsw_index.bin"
+            if candidate.exists():
+                path = str(candidate)
         self._index = hnswlib.Index(space=self._space, dim=self._dim or 0)
         self._index.load_index(path)
         self._n_total = self._index.get_current_count()

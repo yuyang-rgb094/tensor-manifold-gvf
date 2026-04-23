@@ -488,7 +488,16 @@ class UnifiedRetriever:
         return stats
 
     def to_json(self, path: Optional[str] = None) -> str:
-        """Serialize the retriever state to JSON."""
+        """Serialize the retriever state to JSON.
+
+        For large datasets (100k+ docs), it's recommended to use save() instead
+        which stores embeddings in efficient binary numpy format.
+        """
+        if path is not None and len(self._documents) > 10000:
+            logger.warning(
+                "For large datasets (%d docs), consider using save() method instead",
+                len(self._documents)
+            )
         state = {
             "config": {
                 "sbert_model": self.sbert_model,
@@ -498,6 +507,10 @@ class UnifiedRetriever:
                 "decomposer_type": self.decomposer_type,
                 "rank": self.rank,
                 "manifold_mode": self.manifold_mode,
+                "ef_construction": getattr(self, "ef_construction", 200),
+                "ef_search": getattr(self, "ef_search", 128),
+                "M": getattr(self, "M", 16),
+                "hnsw_space": getattr(self, "hnsw_space", "ip"),
             },
             "documents": self._documents,
             "relation_types": self._relation_types,
@@ -519,6 +532,64 @@ class UnifiedRetriever:
             Path(path).write_text(json_str, encoding="utf-8")
             logger.info("Retriever state saved to %s", path)
         return json_str
+
+    def save(self, path: str) -> None:
+        """Save retriever state in an efficient format for large datasets.
+
+        Stores:
+        - config and metadata as JSON
+        - documents as JSON lines
+        - embeddings as numpy binary (.npy) files
+
+        This is much more memory-efficient than to_json() for large datasets.
+        Index will be rebuilt on load.
+        """
+        base_path = Path(path)
+        if base_path.suffix:
+            base_path = base_path.with_suffix("")
+        base_path.mkdir(parents=True, exist_ok=True)
+
+        logger.info("Saving retriever state to %s/ ...", base_path)
+
+        # 1. Save config and metadata
+        metadata = {
+            "config": {
+                "sbert_model": self.sbert_model,
+                "embedding_dim": self.embedding_dim,
+                "manifold_dim": self.manifold_dim,
+                "index_type": self.index_type,
+                "decomposer_type": self.decomposer_type,
+                "rank": self.rank,
+                "manifold_mode": self.manifold_mode,
+                "ef_construction": getattr(self, "ef_construction", 200),
+                "ef_search": getattr(self, "ef_search", 128),
+                "M": getattr(self, "M", 16),
+                "hnsw_space": getattr(self, "hnsw_space", "ip"),
+            },
+            "relation_types": self._relation_types,
+            "id_to_idx": self._id_to_idx,
+            "built": self._built,
+            "n_documents": len(self._documents),
+        }
+        with open(base_path / "metadata.json", "w", encoding="utf-8") as f:
+            json.dump(metadata, f, ensure_ascii=False, indent=2)
+
+        # 2. Save documents as JSON lines (streaming to avoid memory issues)
+        logger.info("Saving %d documents...", len(self._documents))
+        with open(base_path / "documents.jsonl", "w", encoding="utf-8") as f:
+            for doc in self._documents:
+                f.write(json.dumps(doc, ensure_ascii=False) + "\n")
+
+        # 3. Save embeddings as numpy binary (most efficient format)
+        if self._embeddings is not None:
+            logger.info("Saving embeddings (%s)...", str(self._embeddings.shape))
+            np.save(base_path / "embeddings.npy", self._embeddings)
+
+        if self._manifold_embeddings is not None:
+            logger.info("Saving manifold embeddings (%s)...", str(self._manifold_embeddings.shape))
+            np.save(base_path / "manifold_embeddings.npy", self._manifold_embeddings)
+
+        logger.info("Retriever state saved to %s/ (index will be rebuilt on load)", base_path)
 
     @classmethod
     def from_json(cls, path: str) -> "UnifiedRetriever":
@@ -553,6 +624,71 @@ class UnifiedRetriever:
             )
 
         logger.info("Retriever loaded from %s (%d docs)", path, len(retriever._documents))
+        return retriever
+
+    @classmethod
+    def load(cls, path: str) -> "UnifiedRetriever":
+        """Load retriever from efficient binary format saved by save()."""
+        base_path = Path(path)
+        if not base_path.is_dir():
+            if base_path.exists() and base_path.suffix == ".json":
+                logger.info("%s is a JSON file, using from_json() instead", path)
+                return cls.from_json(path)
+            raise FileNotFoundError(f"Directory not found: {path}")
+
+        logger.info("Loading retriever state from %s/ ...", base_path)
+
+        # 1. Load metadata
+        with open(base_path / "metadata.json", "r", encoding="utf-8") as f:
+            metadata = json.load(f)
+
+        config = metadata["config"]
+        retriever = cls(config=config)
+        retriever._relation_types = metadata.get("relation_types", [])
+        retriever._id_to_idx = metadata.get("id_to_idx", {})
+        retriever._built = metadata.get("built", True)
+
+        # 2. Load documents (streaming to avoid memory issues)
+        logger.info("Loading documents...")
+        retriever._documents = []
+        with open(base_path / "documents.jsonl", "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    retriever._documents.append(json.loads(line))
+
+        # 3. Load embeddings
+        embeddings_path = base_path / "embeddings.npy"
+        if embeddings_path.exists():
+            logger.info("Loading embeddings...")
+            retriever._embeddings = np.load(str(embeddings_path))
+
+        manifold_embeddings_path = base_path / "manifold_embeddings.npy"
+        if manifold_embeddings_path.exists():
+            logger.info("Loading manifold embeddings...")
+            retriever._manifold_embeddings = np.load(str(manifold_embeddings_path))
+
+        # 4. Initialize components and rebuild index
+        if retriever._manifold_embeddings is not None:
+            retriever._init_components()
+
+            logger.info("Building index...")
+            retriever._index.build(retriever._manifold_embeddings)
+
+            # Reconstruct minimal signatures for decomposer
+            logger.info("Initializing decomposer...")
+            retriever._tensor_signatures = [
+                {"doc_id": doc["id"], "entities": [], "relations": [],
+                 "shape": (0, 0, retriever.embedding_dim), "slices": [],
+                 "entity_count": 0, "relation_count": len(retriever._relation_types) or 1}
+                for doc in retriever._documents
+            ]
+            retriever._decomposer.init(
+                retriever._tensor_signatures, retriever._manifold_embeddings,
+                retriever._relation_types
+            )
+
+        logger.info("Retriever loaded from %s/ (%d docs)", base_path, len(retriever._documents))
         return retriever
 
     # ------------------------------------------------------------------
