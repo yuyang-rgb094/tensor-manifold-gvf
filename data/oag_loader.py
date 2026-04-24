@@ -178,6 +178,8 @@ class OAGLoader:
             if isinstance(author_info, dict):
                 author_id = str(author_info.get("id", ""))
                 author_name = author_info.get("name", "")
+                inst_id = str(author_info.get("org_id", ""))
+                inst_name = author_info.get("org", "")
             else:
                 author_id = str(author_info)
                 author_name = str(author_info)
@@ -197,6 +199,20 @@ class OAGLoader:
                 source_id=author_id,
                 target_id=str(paper_id),
                 edge_type=EdgeType.WORKS_ON,
+            ))
+
+            inst_node = Node(
+                node_id=inst_id,
+                node_type=NodeType.INSTITUTION,
+                attributes={"name": inst_name},
+            )
+            graph.add_node(inst_node)
+
+            # Link authors to institution
+            graph.add_edge(Edge(
+                source_id=author_id,
+                target_id=inst_id,
+                edge_type=EdgeType.AFFILIATION,
             ))
 
         # Extract collaboration edges between co-authors
@@ -232,34 +248,6 @@ class OAGLoader:
                 target_id=str(journal_id),
                 edge_type=EdgeType.PUBLISHES_IN,
             ))
-
-        # Extract institution nodes and affiliation edges
-        institutions = record.get("institutions", [])
-        for inst_info in institutions:
-            if isinstance(inst_info, dict):
-                inst_id = str(inst_info.get("id", ""))
-                inst_name = inst_info.get("name", "")
-            else:
-                inst_id = str(inst_info)
-                inst_name = str(inst_info)
-
-            if not inst_id:
-                continue
-
-            inst_node = Node(
-                node_id=inst_id,
-                node_type=NodeType.INSTITUTION,
-                attributes={"name": inst_name},
-            )
-            graph.add_node(inst_node)
-
-            # Link authors to institution
-            for aid in author_ids:
-                graph.add_edge(Edge(
-                    source_id=aid,
-                    target_id=inst_id,
-                    edge_type=EdgeType.AFFILIATION,
-                ))
 
         # Extract citation edges
         references = record.get("references", [])

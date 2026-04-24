@@ -15,6 +15,12 @@ from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
 
+try:
+    from tqdm import tqdm
+    _HAS_TQDM = True
+except ImportError:
+    _HAS_TQDM = False
+
 
 class SignatureBuilder:
     """Construct tensor signatures for a collection of documents.
@@ -103,7 +109,8 @@ class SignatureBuilder:
                 rel_map.setdefault(tgt, []).append(rel)
 
         signatures: List[Dict[str, Any]] = []
-        for doc in documents:
+        doc_iter = tqdm(documents, desc="Building signatures") if _HAS_TQDM else documents
+        for doc in doc_iter:
             doc_rels = rel_map.get(doc["id"], [])
             entities = self.extract_entities(doc)
             n_entities = len(entities)

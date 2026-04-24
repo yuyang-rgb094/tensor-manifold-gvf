@@ -22,7 +22,7 @@ manifold:
 
 # --- Index Configuration ---
 index:
-  type: "brute"                  # "faiss", "hnswlib", or "brute"
+  type: "hnswlib"                  # "faiss", "hnswlib", or "brute"
   # FAISS-specific
   faiss:
     metric: "ip"                 # "ip" or "l2"

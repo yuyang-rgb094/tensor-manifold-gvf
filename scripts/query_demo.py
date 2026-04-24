@@ -10,6 +10,7 @@ Commands:
 
 Usage:
     python scripts/query_demo.py --index retriever_state.json
+    python scripts/query_demo.py --index retriever_state/ (directory format)
     python scripts/query_demo.py --data papers.json --citations citations.json
 """
 
@@ -232,7 +233,11 @@ def main():
     # Load or build retriever
     if args.index:
         logger.info("Loading retriever from %s ...", args.index)
-        retriever = UnifiedRetriever.from_json(args.index)
+        index_path = Path(args.index)
+        if index_path.is_dir():
+            retriever = UnifiedRetriever.load(args.index)
+        else:
+            retriever = UnifiedRetriever.from_json(args.index)
     elif args.data:
         logger.info("Building retriever from %s ...", args.data)
         retriever = build_from_data(args.data, args.citations)

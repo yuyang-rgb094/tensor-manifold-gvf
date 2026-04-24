@@ -31,6 +31,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger("build_index")
 
+try:
+    from tqdm import tqdm
+    _HAS_TQDM = True
+except ImportError:
+    _HAS_TQDM = False
+
 
 def load_config(config_path: str) -> Dict[str, Any]:
     """Load configuration from YAML or JSON file."""
@@ -59,21 +65,40 @@ def load_oag_data(data_path: str) -> List[Dict[str, Any]]:
 
     Supports:
     - Raw OAG JSON (list of paper records)
-    - Simplified format (list of dicts with id, title, abstract, etc.)
+    - Simplified JSON format (list of dicts with id, title, abstract, etc.)
+    - JSONL format (one JSON object per line)
     """
     path = Path(data_path)
     if not path.exists():
         raise FileNotFoundError(f"Data file not found: {data_path}")
 
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    # Detect format by file extension
+    suffix = path.suffix.lower()
+    is_jsonl = suffix == ".jsonl"
 
-    if isinstance(data, dict):
-        # OAG format may wrap papers in a key
-        for key in ("papers", "data", "records", "results"):
-            if key in data:
-                data = data[key]
-                break
+    if is_jsonl:
+        # Load JSONL format: one JSON object per line
+        data = []
+        with open(path, "r", encoding="utf-8") as f:
+            for line_num, line in enumerate(f, 1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data.append(json.loads(line))
+                except json.JSONDecodeError as e:
+                    logger.warning("Skipping invalid JSON on line %d: %s", line_num, e)
+    else:
+        # Load JSON format (existing behavior)
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        if isinstance(data, dict):
+            # OAG format may wrap papers in a key
+            for key in ("papers", "data", "records", "results"):
+                if key in data:
+                    data = data[key]
+                    break
 
     if not isinstance(data, list):
         raise ValueError(f"Expected a list of documents, got {type(data)}")
@@ -98,14 +123,32 @@ def load_oag_data(data_path: str) -> List[Dict[str, Any]]:
 
 
 def load_citations(citations_path: str) -> List[Dict[str, Any]]:
-    """Load citation relationships from JSON file."""
+    """Load citation relationships from JSON or JSONL file."""
     path = Path(citations_path)
     if not path.exists():
         logger.warning("Citations file %s not found; no relations loaded.", citations_path)
         return []
 
-    with open(path, "r", encoding="utf-8") as f:
-        citations = json.load(f)
+    # Detect format by file extension
+    suffix = path.suffix.lower()
+    is_jsonl = suffix == ".jsonl"
+
+    if is_jsonl:
+        # Load JSONL format: one JSON object per line
+        citations = []
+        with open(path, "r", encoding="utf-8") as f:
+            for line_num, line in enumerate(f, 1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    citations.append(json.loads(line))
+                except json.JSONDecodeError as e:
+                    logger.warning("Skipping invalid JSON on line %d: %s", line_num, e)
+    else:
+        # Load JSON format (existing behavior)
+        with open(path, "r", encoding="utf-8") as f:
+            citations = json.load(f)
 
     # Normalize to {source, target, type} format
     relations = []
@@ -158,7 +201,14 @@ def main():
         "--output", "-o",
         type=str,
         default=None,
-        help="Path to save the built retriever state (JSON)",
+        help="Path to save the built retriever state",
+    )
+    parser.add_argument(
+        "--output-format",
+        type=str,
+        default="auto",
+        choices=["auto", "json", "dir"],
+        help="Output format: 'auto' (default, chooses dir for >10k docs), 'json', or 'dir'",
     )
     parser.add_argument(
         "--query", "-q",
@@ -203,23 +253,92 @@ def main():
         action="store_true",
         help="Skip demo query after building",
     )
+    parser.add_argument(
+        "--ef-construction",
+        type=int,
+        default=200,
+        help="HNSW: ef_construction parameter",
+    )
+    parser.add_argument(
+        "--ef-search",
+        type=int,
+        default=128,
+        help="HNSW: ef_search parameter",
+    )
+    parser.add_argument(
+        "--M",
+        type=int,
+        default=16,
+        help="HNSW: M parameter (max connections per node)",
+    )
+    parser.add_argument(
+        "--hnsw-space",
+        type=str,
+        default="ip",
+        choices=["ip", "l2"],
+        help="HNSW: distance metric",
+    )
 
     args = parser.parse_args()
 
     # Load config
     config = load_config(args.config) if args.config else {}
 
-    # Override config with CLI args
+    # Override config with CLI args (support both flat and nested structure)
     if args.sbert_model:
         config["sbert_model"] = args.sbert_model
+        # Also update nested structure
+        if "encoder" not in config:
+            config["encoder"] = {}
+        config["encoder"]["model_name"] = args.sbert_model
     if args.manifold_dim:
         config["manifold_dim"] = args.manifold_dim
+        if "manifold" not in config:
+            config["manifold"] = {}
+        config["manifold"]["output_dim"] = args.manifold_dim
     if args.index_type:
         config["index_type"] = args.index_type
+        if "index" not in config:
+            config["index"] = {}
+        config["index"]["type"] = args.index_type
     if args.decomposer_type:
         config["decomposer_type"] = args.decomposer_type
+        if "decomposer" not in config:
+            config["decomposer"] = {}
+        config["decomposer"]["type"] = args.decomposer_type
     if args.rank:
         config["rank"] = args.rank
+        if "decomposer" not in config:
+            config["decomposer"] = {}
+        config["decomposer"]["rank"] = args.rank
+    if args.ef_construction:
+        config["ef_construction"] = args.ef_construction
+        if "index" not in config:
+            config["index"] = {}
+        if "hnswlib" not in config["index"]:
+            config["index"]["hnswlib"] = {}
+        config["index"]["hnswlib"]["ef_construction"] = args.ef_construction
+    if args.ef_search:
+        config["ef_search"] = args.ef_search
+        if "index" not in config:
+            config["index"] = {}
+        if "hnswlib" not in config["index"]:
+            config["index"]["hnswlib"] = {}
+        config["index"]["hnswlib"]["ef_search"] = args.ef_search
+    if args.M:
+        config["M"] = args.M
+        if "index" not in config:
+            config["index"] = {}
+        if "hnswlib" not in config["index"]:
+            config["index"]["hnswlib"] = {}
+        config["index"]["hnswlib"]["M"] = args.M
+    if args.hnsw_space:
+        config["hnsw_space"] = args.hnsw_space
+        if "index" not in config:
+            config["index"] = {}
+        if "hnswlib" not in config["index"]:
+            config["index"]["hnswlib"] = {}
+        config["index"]["hnswlib"]["space"] = args.hnsw_space
 
     # Load data
     documents = load_oag_data(args.data)
@@ -247,8 +366,19 @@ def main():
 
     # Save state
     if args.output:
-        retriever.to_json(args.output)
-        print(f"  Saved to:          {args.output}")
+        # Choose format based on size or user choice
+        use_dir_format = False
+        if args.output_format == "dir":
+            use_dir_format = True
+        elif args.output_format == "auto" and len(retriever) > 10000:
+            use_dir_format = True
+
+        if use_dir_format:
+            retriever.save(args.output)
+            print(f"  Saved to:          {args.output}/ (directory format)")
+        else:
+            retriever.to_json(args.output)
+            print(f"  Saved to:          {args.output}")
 
     # Demo query
     if not args.no_demo:

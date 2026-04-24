@@ -93,6 +93,10 @@ class UnifiedRetriever:
         decomposer_type: str = "cp",
         rank: int = 8,
         manifold_mode: str = "truncate",
+        ef_construction: int = 200,
+        ef_search: int = 128,
+        M: int = 16,
+        hnsw_space: str = "ip",
     ):
         """
         Parameters
@@ -113,8 +117,51 @@ class UnifiedRetriever:
             Rank for CP / Tucker decomposition.
         manifold_mode : str
             Manifold projection mode: ``"truncate"`` or ``"learned"``.
+        ef_construction : int
+            HNSW: beam width during index construction.
+        ef_search : int
+            HNSW: beam width during search.
+        M : int
+            HNSW: max connections per node.
         """
         if config is not None:
+            # Support both flat config structure and nested (default_config.yaml style)
+            encoder_config = config.get("encoder", {})
+            manifold_config = config.get("manifold", {})
+            index_config = config.get("index", {})
+            decomposer_config = config.get("decomposer", {})
+
+            # Extract encoder params
+            if encoder_config:
+                sbert_model = encoder_config.get("model_name", sbert_model)
+                embedding_dim = encoder_config.get("embedding_dim", embedding_dim)
+
+            # Extract manifold params
+            if manifold_config:
+                manifold_dim = manifold_config.get("output_dim", manifold_dim)
+                manifold_mode = manifold_config.get("mode", manifold_mode)
+
+            # Extract index params
+            if index_config:
+                index_type = index_config.get("type", index_type)
+                hnswlib_config = index_config.get("hnswlib", {})
+                if hnswlib_config:
+                    ef_construction = hnswlib_config.get("ef_construction", ef_construction)
+                    ef_search = hnswlib_config.get("ef_search", ef_search)
+                    M = hnswlib_config.get("M", M)
+                    hnsw_space = hnswlib_config.get("space", hnsw_space)
+                    # Also check index_config top-level
+                    if not ef_construction:
+                        ef_construction = index_config.get("ef_construction", ef_construction)
+                    if not M:
+                        M = index_config.get("M", M)
+
+            # Extract decomposer params
+            if decomposer_config:
+                decomposer_type = decomposer_config.get("type", decomposer_type)
+                rank = decomposer_config.get("rank", rank)
+
+            # Also support flat config structure for backward compatibility
             sbert_model = config.get("sbert_model", sbert_model)
             embedding_dim = config.get("embedding_dim", embedding_dim)
             manifold_dim = config.get("manifold_dim", manifold_dim)
@@ -122,6 +169,9 @@ class UnifiedRetriever:
             decomposer_type = config.get("decomposer_type", decomposer_type)
             rank = config.get("rank", rank)
             manifold_mode = config.get("manifold_mode", manifold_mode)
+            ef_construction = config.get("ef_construction", ef_construction)
+            ef_search = config.get("ef_search", ef_search)
+            M = config.get("M", M)
 
         self.sbert_model = sbert_model or self.DEFAULT_SBERT_MODEL
         self.embedding_dim = embedding_dim
@@ -130,6 +180,13 @@ class UnifiedRetriever:
         self.decomposer_type = decomposer_type
         self.rank = rank
         self.manifold_mode = manifold_mode
+        self.ef_construction = ef_construction
+        self.ef_search = ef_search
+        self.M = M
+        self.hnsw_space = hnsw_space
+
+        # Store full config for reference
+        self._config = config
 
         # ------------------------------------------------------------------
         # Pipeline components (populated by build / _init_components)
@@ -431,7 +488,16 @@ class UnifiedRetriever:
         return stats
 
     def to_json(self, path: Optional[str] = None) -> str:
-        """Serialize the retriever state to JSON."""
+        """Serialize the retriever state to JSON.
+
+        For large datasets (100k+ docs), it's recommended to use save() instead
+        which stores embeddings in efficient binary numpy format.
+        """
+        if path is not None and len(self._documents) > 10000:
+            logger.warning(
+                "For large datasets (%d docs), consider using save() method instead",
+                len(self._documents)
+            )
         state = {
             "config": {
                 "sbert_model": self.sbert_model,
@@ -441,6 +507,10 @@ class UnifiedRetriever:
                 "decomposer_type": self.decomposer_type,
                 "rank": self.rank,
                 "manifold_mode": self.manifold_mode,
+                "ef_construction": getattr(self, "ef_construction", 200),
+                "ef_search": getattr(self, "ef_search", 128),
+                "M": getattr(self, "M", 16),
+                "hnsw_space": getattr(self, "hnsw_space", "ip"),
             },
             "documents": self._documents,
             "relation_types": self._relation_types,
@@ -462,6 +532,64 @@ class UnifiedRetriever:
             Path(path).write_text(json_str, encoding="utf-8")
             logger.info("Retriever state saved to %s", path)
         return json_str
+
+    def save(self, path: str) -> None:
+        """Save retriever state in an efficient format for large datasets.
+
+        Stores:
+        - config and metadata as JSON
+        - documents as JSON lines
+        - embeddings as numpy binary (.npy) files
+
+        This is much more memory-efficient than to_json() for large datasets.
+        Index will be rebuilt on load.
+        """
+        base_path = Path(path)
+        if base_path.suffix:
+            base_path = base_path.with_suffix("")
+        base_path.mkdir(parents=True, exist_ok=True)
+
+        logger.info("Saving retriever state to %s/ ...", base_path)
+
+        # 1. Save config and metadata
+        metadata = {
+            "config": {
+                "sbert_model": self.sbert_model,
+                "embedding_dim": self.embedding_dim,
+                "manifold_dim": self.manifold_dim,
+                "index_type": self.index_type,
+                "decomposer_type": self.decomposer_type,
+                "rank": self.rank,
+                "manifold_mode": self.manifold_mode,
+                "ef_construction": getattr(self, "ef_construction", 200),
+                "ef_search": getattr(self, "ef_search", 128),
+                "M": getattr(self, "M", 16),
+                "hnsw_space": getattr(self, "hnsw_space", "ip"),
+            },
+            "relation_types": self._relation_types,
+            "id_to_idx": self._id_to_idx,
+            "built": self._built,
+            "n_documents": len(self._documents),
+        }
+        with open(base_path / "metadata.json", "w", encoding="utf-8") as f:
+            json.dump(metadata, f, ensure_ascii=False, indent=2)
+
+        # 2. Save documents as JSON lines (streaming to avoid memory issues)
+        logger.info("Saving %d documents...", len(self._documents))
+        with open(base_path / "documents.jsonl", "w", encoding="utf-8") as f:
+            for doc in self._documents:
+                f.write(json.dumps(doc, ensure_ascii=False) + "\n")
+
+        # 3. Save embeddings as numpy binary (most efficient format)
+        if self._embeddings is not None:
+            logger.info("Saving embeddings (%s)...", str(self._embeddings.shape))
+            np.save(base_path / "embeddings.npy", self._embeddings)
+
+        if self._manifold_embeddings is not None:
+            logger.info("Saving manifold embeddings (%s)...", str(self._manifold_embeddings.shape))
+            np.save(base_path / "manifold_embeddings.npy", self._manifold_embeddings)
+
+        logger.info("Retriever state saved to %s/ (index will be rebuilt on load)", base_path)
 
     @classmethod
     def from_json(cls, path: str) -> "UnifiedRetriever":
@@ -498,6 +626,71 @@ class UnifiedRetriever:
         logger.info("Retriever loaded from %s (%d docs)", path, len(retriever._documents))
         return retriever
 
+    @classmethod
+    def load(cls, path: str) -> "UnifiedRetriever":
+        """Load retriever from efficient binary format saved by save()."""
+        base_path = Path(path)
+        if not base_path.is_dir():
+            if base_path.exists() and base_path.suffix == ".json":
+                logger.info("%s is a JSON file, using from_json() instead", path)
+                return cls.from_json(path)
+            raise FileNotFoundError(f"Directory not found: {path}")
+
+        logger.info("Loading retriever state from %s/ ...", base_path)
+
+        # 1. Load metadata
+        with open(base_path / "metadata.json", "r", encoding="utf-8") as f:
+            metadata = json.load(f)
+
+        config = metadata["config"]
+        retriever = cls(config=config)
+        retriever._relation_types = metadata.get("relation_types", [])
+        retriever._id_to_idx = metadata.get("id_to_idx", {})
+        retriever._built = metadata.get("built", True)
+
+        # 2. Load documents (streaming to avoid memory issues)
+        logger.info("Loading documents...")
+        retriever._documents = []
+        with open(base_path / "documents.jsonl", "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    retriever._documents.append(json.loads(line))
+
+        # 3. Load embeddings
+        embeddings_path = base_path / "embeddings.npy"
+        if embeddings_path.exists():
+            logger.info("Loading embeddings...")
+            retriever._embeddings = np.load(str(embeddings_path))
+
+        manifold_embeddings_path = base_path / "manifold_embeddings.npy"
+        if manifold_embeddings_path.exists():
+            logger.info("Loading manifold embeddings...")
+            retriever._manifold_embeddings = np.load(str(manifold_embeddings_path))
+
+        # 4. Initialize components and rebuild index
+        if retriever._manifold_embeddings is not None:
+            retriever._init_components()
+
+            logger.info("Building index...")
+            retriever._index.build(retriever._manifold_embeddings)
+
+            # Reconstruct minimal signatures for decomposer
+            logger.info("Initializing decomposer...")
+            retriever._tensor_signatures = [
+                {"doc_id": doc["id"], "entities": [], "relations": [],
+                 "shape": (0, 0, retriever.embedding_dim), "slices": [],
+                 "entity_count": 0, "relation_count": len(retriever._relation_types) or 1}
+                for doc in retriever._documents
+            ]
+            retriever._decomposer.init(
+                retriever._tensor_signatures, retriever._manifold_embeddings,
+                retriever._relation_types
+            )
+
+        logger.info("Retriever loaded from %s/ (%d docs)", base_path, len(retriever._documents))
+        return retriever
+
     # ------------------------------------------------------------------
     # Internal: Component initialization
     # ------------------------------------------------------------------
@@ -513,6 +706,11 @@ class UnifiedRetriever:
                 "max_length": 512,
                 "use_cache": True,
             }
+            # If we have a full config, use encoder config from there
+            if hasattr(self, '_config') and self._config:
+                cfg_encoder = self._config.get("encoder", {})
+                if cfg_encoder:
+                    encoder_config.update(cfg_encoder)
             self._encoder = create_encoder(encoder_config)
 
         # Signature builder
@@ -523,15 +721,30 @@ class UnifiedRetriever:
 
         # Manifold projector
         if self._projector is None:
-            self._projector = ManifoldProjector(
-                mode=self.manifold_mode,
-                semantic_dim=self.embedding_dim,
-                output_dim=self.manifold_dim,
-            )
+            projector_kwargs = {
+                "mode": self.manifold_mode,
+                "semantic_dim": self.embedding_dim,
+                "output_dim": self.manifold_dim,
+            }
+            # Add additional params from config if available
+            if hasattr(self, '_config') and self._config:
+                manifold_config = self._config.get("manifold", {})
+                if manifold_config:
+                    projector_kwargs["signature_dim"] = manifold_config.get("signature_dim", 64)
+                    projector_kwargs["hidden_dim"] = manifold_config.get("hidden_dim", 128)
+                    projector_kwargs["num_relations"] = manifold_config.get("num_relations", 4)
+            self._projector = ManifoldProjector(**projector_kwargs)
 
         # Vector index
         if self._index is None:
-            self._index = create_index(self.index_type)
+            index_kwargs = {}
+            if self.index_type == "hnswlib":
+                # Extract HNSW-specific params from config
+                index_kwargs["ef_construction"] = getattr(self, "ef_construction", 200)
+                index_kwargs["ef_search"] = getattr(self, "ef_search", 128)
+                index_kwargs["M"] = getattr(self, "M", 16)
+                index_kwargs["space"] = getattr(self, "hnsw_space", "ip")
+            self._index = create_index(self.index_type, **index_kwargs)
 
         # Tensor decomposer
         if self._decomposer is None:
