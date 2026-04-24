@@ -86,14 +86,39 @@ class SentenceTransformerEncoder(EmbeddingEncoder):
         try:
             from sentence_transformers import SentenceTransformer  # noqa: WPS433
 
+            # Auto-detect device if not specified
+            device_to_use = self._device
+            if device_to_use is None:
+                # Try to detect CUDA/MPS availability
+                try:
+                    # Check torch availability dynamically
+                    import importlib
+                    torch_spec = importlib.util.find_spec("torch")
+                    if torch_spec is not None:
+                        torch = importlib.import_module("torch")
+                        if torch.cuda.is_available():
+                            device_to_use = "cuda"
+                        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                            device_to_use = "mps"
+                        else:
+                            device_to_use = "cpu"
+                    else:
+                        device_to_use = "cpu"
+                except (ImportError, AttributeError):
+                    device_to_use = "cpu"
+
             kwargs: Dict[str, Any] = {}
-            if self._device is not None:
-                kwargs["device"] = self._device
-            self._model = SentenceTransformer(self._model_name, **kwargs)
+            kwargs["device"] = device_to_use
+            self._model = SentenceTransformer(self._model_name, local_files_only=True, **kwargs)
+            # Log the actual device being used
+            actual_device = str(getattr(self._model, 'device', 'unknown'))
+            if hasattr(self._model, '_target_device'):
+                actual_device = str(self._model._target_device)
             logger.info(
-                "Loaded sentence-transformers model '%s' (dim=%d)",
+                "Loaded sentence-transformers model '%s' (dim=%d, device=%s)",
                 self._model_name,
                 self._model.get_sentence_embedding_dimension(),
+                actual_device,
             )
         except ImportError:
             logger.warning(
@@ -174,11 +199,18 @@ class SentenceTransformerEncoder(EmbeddingEncoder):
         if self._fallback_mode:
             return self._encode_fallback(texts)
 
+        encode_kwargs: Dict[str, Any] = {
+            "batch_size": self._batch_size,
+            "show_progress_bar": True,
+            "normalize_embeddings": True,
+        }
+        # Pass device explicitly if specified
+        if self._device is not None:
+            encode_kwargs["device"] = self._device
+
         embeddings = self._model.encode(  # type: ignore[union-attr]
             texts,
-            batch_size=self._batch_size,
-            show_progress_bar=True,
-            normalize_embeddings=True,
+            **encode_kwargs,
         )
         return np.asarray(embeddings, dtype=np.float32)
 
