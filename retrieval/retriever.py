@@ -93,6 +93,8 @@ class UnifiedRetriever:
         decomposer_type: str = "cp",
         rank: int = 8,
         manifold_mode: str = "truncate",
+        channels_config: Optional[Dict[str, Any]] = None,
+        task_name: str = "semantic_retrieval",
     ):
         """
         Parameters
@@ -113,6 +115,14 @@ class UnifiedRetriever:
             Rank for CP / Tucker decomposition.
         manifold_mode : str
             Manifold projection mode: ``"truncate"`` or ``"learned"``.
+        channels_config : dict, optional
+            Four-channel encoder configuration.  When provided and
+            ``channels_config["enabled"]`` is ``True``, the retriever
+            uses the v2 four-channel pipeline instead of v1.
+        task_name : str
+            Task type for task-specific attention heads.
+            One of ``"semantic_retrieval"``, ``"citation_analysis"``,
+            ``"author_disambiguation"``, ``"trend_analysis"``.
         """
         if config is not None:
             sbert_model = config.get("sbert_model", sbert_model)
@@ -122,6 +132,8 @@ class UnifiedRetriever:
             decomposer_type = config.get("decomposer_type", decomposer_type)
             rank = config.get("rank", rank)
             manifold_mode = config.get("manifold_mode", manifold_mode)
+            channels_config = config.get("channels", channels_config)
+            task_name = config.get("task_name", task_name)
 
         self.sbert_model = sbert_model or self.DEFAULT_SBERT_MODEL
         self.embedding_dim = embedding_dim
@@ -130,6 +142,7 @@ class UnifiedRetriever:
         self.decomposer_type = decomposer_type
         self.rank = rank
         self.manifold_mode = manifold_mode
+        self.task_name = task_name
 
         # ------------------------------------------------------------------
         # Pipeline components (populated by build / _init_components)
@@ -139,6 +152,19 @@ class UnifiedRetriever:
         self._projector: Optional[ManifoldProjector] = None
         self._index: Optional[VectorIndex] = None
         self._decomposer: Optional[TensorDecomposer] = None
+
+        # ------------------------------------------------------------------
+        # Four-channel components (v2, optional)
+        # ------------------------------------------------------------------
+        self._channels_enabled: bool = False
+        self._channels_config: Optional[Dict[str, Any]] = channels_config
+        self._channel_encoders: Dict[str, Any] = {}
+        self._fusion_encoder: Optional[Any] = None
+        self._task_heads: Dict[str, Any] = {}  # task_name -> TaskSpecificAttentionHead
+        self._current_task_head: Optional[Any] = None
+        self._graph: Optional[Any] = None
+        self._qdrant_store: Optional[Any] = None  # QdrantStore if qdrant enabled
+        self._qdrant_enabled: bool = False
 
         # Internal state
         self._documents: List[Dict[str, Any]] = []
@@ -157,17 +183,28 @@ class UnifiedRetriever:
         self,
         documents: Sequence[Dict[str, Any]],
         relations: Optional[Sequence[Dict[str, Any]]] = None,
+        graph: Optional[Any] = None,
     ) -> "UnifiedRetriever":
         """
         Build the full retrieval pipeline.
 
         Steps
         -----
+        **v1 mode** (default):
         1. Encode documents with EmbeddingEncoder
         2. Construct tensor signatures via SignatureBuilder
         3. Project onto manifold via ManifoldProjector
         4. Build vector index
         5. Initialize tensor decomposer
+
+        **v2 four-channel mode** (``channels.enabled: true``):
+        1. Semantic channel: encode title + abstract
+        2. Metadata channel: encode authors, keywords, venue
+        3. Topology channel: encode citation graph structure
+        4. Temporal channel: encode publication timestamps
+        5. Four-channel fusion → manifold embeddings
+        6. Build vector index
+        7. Initialize tensor decomposer
 
         Parameters
         ----------
@@ -175,12 +212,30 @@ class UnifiedRetriever:
             Each dict must have at least ``id``, ``title``, ``abstract``.
         relations : sequence of dict, optional
             Each dict: ``{"source": str, "target": str, "type": str}``.
+        graph : HeteroAcademicGraph, optional
+            Academic literature graph (required for topology channel in v2).
 
         Returns
         -------
         self
         """
         relations = relations or []
+
+        # Resolve channel mode BEFORE routing so _channels_enabled is correct
+        if not self._built:
+            self._init_components()
+
+        if self._channels_enabled:
+            return self._build_four_channel(documents, relations, graph)
+
+        return self._build_v1(documents, relations)
+
+    def _build_v1(
+        self,
+        documents: Sequence[Dict[str, Any]],
+        relations: Sequence[Dict[str, Any]],
+    ) -> "UnifiedRetriever":
+        """v1 single-encoder build pipeline."""
         t0 = time.time()
 
         self._init_components()
@@ -215,6 +270,110 @@ class UnifiedRetriever:
                      elapsed, len(documents), self.manifold_dim)
         return self
 
+    def _build_four_channel(
+        self,
+        documents: Sequence[Dict[str, Any]],
+        relations: Sequence[Dict[str, Any]],
+        graph: Optional[Any] = None,
+    ) -> "UnifiedRetriever":
+        """v2 four-channel build pipeline."""
+        t0 = time.time()
+
+        self._init_components()
+        self._documents = list(documents)
+
+        # Step 1: Semantic encoding
+        logger.info("Step 1/7: Semantic encoding (%d documents) ...", len(documents))
+        texts = [
+            f"{d.get('title', '')} {d.get('abstract', '')}".strip()
+            for d in self._documents
+        ]
+        semantic_emb = self._channel_encoders["semantic"].encode(texts)
+
+        # Step 2: Metadata encoding
+        logger.info("Step 2/7: Metadata encoding ...")
+        meta_encoder = self._channel_encoders["metadata"]
+        if hasattr(meta_encoder, "build_vocab") and not getattr(meta_encoder, "_vocab_built", False):
+            meta_encoder.build_vocab(self._documents)
+        metadata_emb = meta_encoder.encode(self._documents)
+
+        # Step 3: Topology encoding
+        logger.info("Step 3/7: Topology encoding ...")
+        if graph is not None:
+            self._graph = graph
+            node_features = {
+                d["id"]: semantic_emb[i]
+                for i, d in enumerate(self._documents)
+                if "id" in d
+            }
+            topology_emb = self._channel_encoders["topology"].encode(
+                (graph, node_features)
+            )
+        else:
+            logger.warning("No graph provided; topology channel using zero vectors.")
+            topo_dim = self._channel_encoders["topology"].output_dim
+            topology_emb = np.zeros((len(documents), topo_dim), dtype=np.float32)
+
+        # Step 4: Temporal encoding
+        logger.info("Step 4/7: Temporal encoding ...")
+        timestamps = [float(d.get("year", 2020)) for d in self._documents]
+        temp_encoder = self._channel_encoders["temporal"]
+        if hasattr(temp_encoder, "fit") and not getattr(temp_encoder, "_fitted", False):
+            temp_encoder.fit(timestamps)
+        temporal_emb = temp_encoder.encode(timestamps)
+
+        # Step 5: Four-channel fusion
+        logger.info("Step 5/7: Four-channel fusion ...")
+        manifold_emb = self._fusion_encoder.encode_all_from_channels(
+            semantic_emb, metadata_emb, topology_emb, temporal_emb
+        )
+        self._manifold_embeddings = manifold_emb
+
+        # Step 6: Build vector index
+        logger.info("Step 6/7: Building %s index ...", self.index_type)
+        self._index.build(manifold_emb)
+
+        # Step 6b: Store four-channel vectors in Qdrant (if enabled)
+        if self._qdrant_enabled and self._qdrant_store is not None:
+            try:
+                channel_dims = {
+                    "semantic": self._channel_encoders["semantic"].output_dim,
+                    "metadata": self._channel_encoders["metadata"].output_dim,
+                    "topology": self._channel_encoders["topology"].output_dim,
+                    "temporal": self._channel_encoders["temporal"].output_dim,
+                }
+                self._qdrant_store.create_collection(channel_dims)
+                self._qdrant_store.upsert(
+                    self._documents,
+                    {
+                        "semantic": semantic_emb,
+                        "metadata": metadata_emb,
+                        "topology": topology_emb,
+                        "temporal": temporal_emb,
+                    },
+                )
+                logger.info("Stored %d documents in Qdrant with 4 named vectors",
+                            len(documents))
+            except Exception as e:
+                logger.warning("Qdrant storage failed: %s", e)
+
+        # Step 7: Initialize tensor decomposer
+        logger.info("Step 7/7: Initializing %s decomposer (rank=%d) ...",
+                     self.decomposer_type, self.rank)
+        self._relation_types = self._signature_builder.get_relation_types(relations)
+        signatures = self._signature_builder.build(self._documents, relations)
+        self._tensor_signatures = signatures
+        self._decomposer.init(signatures, manifold_emb, self._relation_types)
+
+        self._id_to_idx = {
+            doc["id"]: idx for idx, doc in enumerate(self._documents)
+        }
+        self._built = True
+        elapsed = time.time() - t0
+        logger.info("Four-channel build complete in %.2f s  (%d docs, dim=%d)",
+                     elapsed, len(documents), self.manifold_dim)
+        return self
+
     def search(
         self,
         query: str,
@@ -242,7 +401,10 @@ class UnifiedRetriever:
         """
         self._ensure_built()
 
-        # Encode and project query
+        if self._channels_enabled:
+            return self._search_four_channel(query, top_k, filter_year, filter_venue)
+
+        # v1: Encode and project query
         query_emb = self._encoder.encode_single(query)
         query_manifold = self._projector.project_single(query_emb)
 
@@ -361,6 +523,75 @@ class UnifiedRetriever:
                 break
 
         return results, decomp
+
+    def _search_four_channel(
+        self,
+        query: str,
+        top_k: int = 10,
+        filter_year: Optional[Tuple[int, int]] = None,
+        filter_venue: Optional[str] = None,
+    ):
+        """Four-channel search: encode query via semantic channel, zero-pad others."""
+        # Encode query via semantic channel only
+        query_sem = self._channel_encoders["semantic"].encode_single(query)
+
+        # Other channels: zero vectors (query has no graph/metadata/time context)
+        query_meta = np.zeros(
+            self._channel_encoders["metadata"].output_dim, dtype=np.float32
+        )
+        query_topo = np.zeros(
+            self._channel_encoders["topology"].output_dim, dtype=np.float32
+        )
+        query_temp = np.zeros(
+            self._channel_encoders["temporal"].output_dim, dtype=np.float32
+        )
+
+        # Fuse
+        query_manifold = self._fusion_encoder.encode_all_from_channels(
+            query_sem.reshape(1, -1),
+            query_meta.reshape(1, -1),
+            query_topo.reshape(1, -1),
+            query_temp.reshape(1, -1),
+        ).ravel()
+
+        # Search index
+        raw_scores, indices = self._index.search(query_manifold, top_k * 3)
+
+        # Apply filters and rank
+        results: List[RetrievalResult] = []
+        for rank, (idx, score) in enumerate(zip(indices, raw_scores)):
+            if idx < 0 or idx >= len(self._documents):
+                continue
+            doc = self._documents[idx]
+
+            if filter_year is not None:
+                doc_year = doc.get("year")
+                if doc_year is None or not (
+                    filter_year[0] <= doc_year <= filter_year[1]
+                ):
+                    continue
+            if filter_venue is not None:
+                doc_venue = doc.get("venue", "")
+                if filter_venue.lower() not in doc_venue.lower():
+                    continue
+
+            results.append(
+                RetrievalResult(
+                    id=doc["id"],
+                    title=doc.get("title", ""),
+                    abstract=doc.get("abstract", ""),
+                    score=float(score),
+                    rank=len(results) + 1,
+                    metadata={
+                        "year": doc.get("year"),
+                        "venue": doc.get("venue"),
+                    },
+                )
+            )
+            if len(results) >= top_k:
+                break
+
+        return results
 
     def incremental_update(
         self,
@@ -504,6 +735,20 @@ class UnifiedRetriever:
 
     def _init_components(self) -> None:
         """Initialize all pipeline components."""
+        # Check if four-channel mode is enabled via direct kwarg or config dict
+        channels_cfg = (
+            self._channels_config
+            or (getattr(self, "config", None) or {}).get("channels")
+        )
+        if channels_cfg is not None and channels_cfg.get("enabled", False):
+            self._channels_config = channels_cfg  # ensure latest reference
+            self._init_four_channel_components()
+            return
+
+        self._init_v1_components()
+
+    def _init_v1_components(self) -> None:
+        """Initialize v1 single-encoder pipeline components."""
         # Encoder
         if self._encoder is None:
             encoder_config = {
@@ -539,6 +784,123 @@ class UnifiedRetriever:
                 decomposer_type=self.decomposer_type,
                 rank=self.rank,
             )
+
+    def _init_four_channel_components(self) -> None:
+        """Initialize v2 four-channel pipeline components."""
+        from .encoders.channels import create_channel_encoder
+        from core.four_channel_encoder import FourChannelFusionEncoder
+        from core.task_attention import create_task_head, TASK_REGISTRY
+
+        self._channels_enabled = True
+        cfg = self._channels_config
+
+        # 1. Semantic channel
+        sem_cfg = cfg.get("semantic", {})
+        self._channel_encoders["semantic"] = create_channel_encoder(
+            "semantic", sem_cfg
+        )
+
+        # 2. Metadata channel (optionally share semantic encoder)
+        meta_cfg = dict(cfg.get("metadata", {}))
+        if meta_cfg.pop("share_semantic_encoder", False):
+            meta_cfg["semantic_encoder"] = self._channel_encoders["semantic"]
+        self._channel_encoders["metadata"] = create_channel_encoder(
+            "metadata", meta_cfg
+        )
+
+        # 3. Topology channel
+        topo_cfg = cfg.get("topology", {})
+        self._channel_encoders["topology"] = create_channel_encoder(
+            "topology", topo_cfg
+        )
+
+        # 4. Temporal channel
+        temp_cfg = cfg.get("temporal", {})
+        self._channel_encoders["temporal"] = create_channel_encoder(
+            "temporal", temp_cfg
+        )
+
+        # 5. Fusion encoder
+        fusion_cfg = cfg.get("fusion", {})
+        self._fusion_encoder = FourChannelFusionEncoder(
+            semantic_dim=self._channel_encoders["semantic"].output_dim,
+            metadata_dim=self._channel_encoders["metadata"].output_dim,
+            topology_dim=self._channel_encoders["topology"].output_dim,
+            temporal_dim=self._channel_encoders["temporal"].output_dim,
+            hidden_dim=fusion_cfg.get("hidden_dim", 256),
+            output_dim=fusion_cfg.get("output_dim", 128),
+            num_relations=fusion_cfg.get("num_relations", 4),
+            num_attention_heads=fusion_cfg.get("num_attention_heads", 4),
+        )
+
+        # 6. Task-specific attention heads (one per task type)
+        for name in TASK_REGISTRY.keys():
+            fusion_output_dim = fusion_cfg.get("output_dim", 128)
+            self._task_heads[name] = create_task_head(
+                name,
+                hidden_dim=fusion_output_dim,
+                output_dim=fusion_output_dim,
+            )
+
+        # Set current task head
+        if self.task_name in self._task_heads:
+            self._current_task_head = self._task_heads[self.task_name]
+        else:
+            self._current_task_head = self._task_heads["semantic_retrieval"]
+
+        # Override manifold_dim to match fusion output
+        self.manifold_dim = fusion_cfg.get("output_dim", 128)
+
+        # Signature builder (still used for tensor decomposition)
+        if self._signature_builder is None:
+            self._signature_builder = SignatureBuilder(
+                embedding_dim=self._channel_encoders["semantic"].output_dim
+            )
+
+        # Vector index
+        if self._index is None:
+            self._index = create_index(self.index_type)
+
+        # Tensor decomposer
+        if self._decomposer is None:
+            self._decomposer = TensorDecomposer(
+                decomposer_type=self.decomposer_type,
+                rank=self.rank,
+            )
+
+        logger.info(
+            "Four-channel mode: sem=%d, meta=%d, topo=%d, temp=%d → fusion=%d, tasks=%s",
+            self._channel_encoders["semantic"].output_dim,
+            self._channel_encoders["metadata"].output_dim,
+            self._channel_encoders["topology"].output_dim,
+            self._channel_encoders["temporal"].output_dim,
+            self.manifold_dim,
+            list(self._task_heads.keys()),
+        )
+
+        # 7. Qdrant store (optional, graceful fallback)
+        qdrant_cfg = cfg.get("qdrant", {})
+        if qdrant_cfg.get("enabled", False):
+            try:
+                from .index.qdrant_store import QdrantStore
+
+                self._qdrant_store = QdrantStore(
+                    collection_name=qdrant_cfg.get(
+                        "collection_name", "tensor_manifold_gvf"
+                    ),
+                    host=qdrant_cfg.get("host", "localhost"),
+                    port=qdrant_cfg.get("port", 6333),
+                    api_key=qdrant_cfg.get("api_key"),
+                    distance=qdrant_cfg.get("distance", "cosine"),
+                )
+                self._qdrant_enabled = True
+                logger.info("Qdrant store enabled: %s", qdrant_cfg.get("host"))
+            except Exception as e:
+                logger.warning(
+                    "Qdrant initialization failed, falling back to in-memory: %s", e
+                )
+                self._qdrant_store = None
+                self._qdrant_enabled = False
 
     # ------------------------------------------------------------------
     # Internal helpers

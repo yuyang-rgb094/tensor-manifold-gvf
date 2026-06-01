@@ -1,6 +1,6 @@
-# Tensor Manifold-Based Graph-Vector Fusion / 张量流形图向量融合
+# Tensor Manifold-Based Graph-Vector Fusion (TMGVF) v2.0
 
-[English](#english) | [中文](#中文)
+[English](#v20-features) | [中文](#v20-特性)
 
 > 📄 **Paper**: [Tensor Manifold-Based Graph-Vector Fusion for AI-Native Academic Literature Retrieval](https://arxiv.org/abs/2604.16416) (arXiv:2604.16416)
 >
@@ -8,382 +8,253 @@
 
 ---
 
-<a id="english"></a>
+<a id="v20-features"></a>
 
-## Tensor Manifold-Based Graph-Vector Fusion (TMGVF)
+## 🔥 v2.0 — Major Architecture Upgrade (2026)
 
-A Python implementation of the **Tensor Manifold-Based Graph-Vector Fusion** framework for AI-native academic literature retrieval, based on the theoretical foundation that academic literature graphs are discrete projections of tensor manifolds. This project unifies text vectors and graph topology into the same geometric space, supporting heterogeneous node types (papers, authors, journals, institutions, disciplines, projects) and multiple edge types (citations, collaborations, affiliations).
+### What's New in v2.0
 
-### Features
+v2.0 is a complete architecture redesign targeting **AI Researchers, Builders, and Agent technology companies**, addressing three core problems of v1:
 
-- **Tensor Signature Construction (Algorithm 1)**: Builds third-order tensors from entity-relation triples in knowledge graphs
-- **Grassmann Vector Field Retrieval (Algorithm 2)**: Projects queries onto the Grassmann manifold for geometrically-aware similarity search
-- **Incremental Manifold Update (Algorithm 3)**: Efficiently updates the index with new documents without full rebuild
-- **Tensor Decomposition**: CP and Tucker decomposition for multi-aspect retrieval and analysis
-- **Multiple Index Backends**: FAISS, HNSWLIB, and brute-force similarity search
-- **OAG Format Support**: Compatible with Open Academic Graph data format
-- **Flexible Output**: JSON, plain-text tables, Markdown, and detailed reports
+| Problem | v1 | v2.0 |
+|---------|-----|------|
+| **Semantic Dilution** | Abstract dominates embeddings (1/2~2/3) | Four independent channels, cross-attention fusion |
+| **Fixed Channel Weights** | Single preset for all tasks | Task-specific attention heads with learned weights |
+| **Memory-only Index** | FAISS/HNSWLIB in-memory | Qdrant named vectors with persistent storage |
 
-### Dependencies
+### v2.0 Architecture
 
 ```
+Four-Channel Encoder
+├── Semantic Channel   → BGE-M3 (1024d, multilingual) or SBERT fallback
+├── Metadata Channel   → Author EmbeddingBag + Keyword BGE-M3 mean
+├── Topology Channel   → GraphSAGE (torch_geometric) or networkx fallback
+└── Temporal Channel  → Time2Vec (learnable sin + linear)
+
+        ↓ Cross-Modal Attention ↓
+
+Task-Specific Attention Head (4 presets)
+├── semantic_retrieval   (sem:0.40, meta:0.20, topo:0.25, temp:0.15)
+├── citation_analysis    (sem:0.20, meta:0.15, topo:0.45, temp:0.20)
+├── author_disambiguation(sem:0.25, meta:0.40, topo:0.15, temp:0.20)
+└── trend_analysis      (sem:0.25, meta:0.20, topo:0.20, temp:0.35)
+
+        ↓ Learned Channel Weights ↓
+
+Qdrant Named Vectors (persistent, multi-channel search)
+├── semantic:  1024d Cosine  ← BGE-M3
+├── metadata:   256d Cosine   ← EmbeddingBag
+├── topology:    32d Cosine   ← GraphSAGE
+└── temporal:    32d Cosine   ← Time2Vec
+```
+
+### v2.0 Quick Start
+
+```bash
+# Install
+pip install -e .
+
+# v1 backward-compatible mode (SBERT + FAISS, default)
+python scripts/build_index.py --data papers.json --citations citations.json
+
+# v2 four-channel mode (requires channels_config)
+python scripts/build_index.py --config config/channels.yaml --data papers.json
+```
+
+### v2.0 Python API
+
+```python
+from retrieval import UnifiedRetriever
+
+# v1 mode (backward compatible)
+retriever = UnifiedRetriever(manifold_dim=64, index_type="faiss")
+retriever.build(documents, relations=citations)
+results = retriever.search("graph neural network", top_k=10)
+
+# v2 four-channel mode
+retriever = UnifiedRetriever(
+    manifold_dim=64,
+    index_type="brute",
+    channels_config={
+        "enabled": True,
+        "semantic": {"model": "BGE-M3"},
+        "metadata": {"output_dim": 256},
+        "topology": {"input_dim": 1024, "hidden_dim": 64},
+        "temporal": {"output_dim": 32},
+        "fusion": {"hidden_dim": 128},
+        "qdrant": {"enabled": True, "host": "localhost", "port": 6333},
+    },
+    task_name="citation_analysis",  # Use task-specific attention head
+)
+retriever.build(documents, relations=citations, graph=hetero_graph)
+results = retriever.search("transformer architecture", top_k=10)
+```
+
+### v2.0 REST API
+
+```bash
+# Start the Knowledge API service
+uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
+
+# Semantic search
+curl -X POST http://localhost:8000/api/v1/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "deep learning", "top_k": 5, "task": "semantic_retrieval"}'
+
+# Citation network analysis
+curl -X POST http://localhost:8000/api/v1/citation/network \
+  -d '{"paper_id": "p1", "depth": 2, "direction": "both"}'
+```
+
+API docs: http://localhost:8000/docs
+
+### v2.0 Dependencies
+
+```
+# Core (required)
 numpy>=1.20.0
-sentence-transformers>=2.0.0   # optional; random embeddings used as fallback
-faiss-cpu>=1.7.0               # optional; brute-force used as fallback
-hnswlib>=0.7.0                 # optional; brute-force used as fallback
-pyyaml>=6.0                    # optional; for YAML config files
+torch>=2.1.0
+sentence-transformers>=2.2.2
+
+# Four-channel encoders (optional, auto-fallback if missing)
+FlagEmbedding>=1.2.0      # BGE-M3 semantic encoder
+torch_geometric>=2.5.0   # GraphSAGE topology encoder
+
+# Vector store (optional)
+qdrant-client>=1.7.0     # Qdrant named vector storage
+
+# Knowledge API (optional)
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.5.0
 ```
 
-### Project Structure
+### v2.0 Project Structure
 
 ```
 tensor_manifold_gvf/
+├── api/                        # FastAPI Knowledge API (ADR-0005)
+│   ├── main.py                 # Application + 6 endpoints
+│   ├── models.py               # Pydantic request/response models
+│   └── router.py               # TaskRouter
+├── core/
+│   ├── four_channel_encoder.py # Cross-modal attention fusion
+│   ├── task_attention.py       # Task-specific attention heads
+│   ├── channel_weight_learner.py # Learned channel weights
+│   └── visualization.py        # Attention weight visualization
 ├── retrieval/
-│   ├── __init__.py              # Module exports
-│   ├── retriever.py             # UnifiedRetriever, RetrievalResult
-│   └── result_formatter.py      # ResultFormatter (JSON/table/Markdown/detailed)
-├── scripts/
-│   ├── build_index.py           # Build retrieval index from data
-│   ├── query_demo.py            # Interactive query REPL
-│   ├── incremental_update.py    # Incremental update with verification
-│   └── benchmark.py             # Performance benchmarking
+│   ├── encoders/
+│   │   ├── channels/           # Four channel encoders
+│   │   │   ├── semantic_channel.py   # BGE-M3 / SBERT
+│   │   │   ├── metadata_channel.py   # EmbeddingBag
+│   │   │   ├── topology_channel.py   # GraphSAGE / networkx
+│   │   │   └── temporal_channel.py   # Time2Vec
+│   │   └── qdrant_store.py     # Qdrant named vector adapter
+│   └── retriever.py            # UnifiedRetriever (v1 + v2)
+├── docs/
+│   ├── adr/                   # Architecture Decision Records
+│   │   ├── 0001-four-channel-architecture.md
+│   │   ├── 0002-cross-modal-attention-fusion.md
+│   │   ├── 0003-qdrant-vector-store.md
+│   │   ├── 0004-embedding-agnostic-design.md
+│   │   ├── 0005-knowledge-api-service.md
+│   │   └── 0006-task-specific-attention-heads.md
+│   └── ROADMAP.md             # Future development roadmap
 ├── tests/
-│   └── __init__.py
-├── examples/
-│   └── self_published_papers/
-│       ├── papers.json          # 10 sample academic papers
-│       └── citations.json       # 19 citation relationships
-└── README.md
+│   ├── test_channels.py        # Channel encoder tests
+│   ├── test_cross_modal_attention.py
+│   ├── test_task_attention.py
+│   ├── test_phase3.py          # Phase 3 TDD (task heads, learner, viz)
+│   ├── test_phase4.py          # Phase 4 TDD (Qdrant integration)
+│   └── test_phase5.py          # Phase 5 TDD (FastAPI API)
+└── docker-compose.yml          # Qdrant local deployment
 ```
 
-### Quick Start
-
-#### 1. Build Index
+### Test Coverage
 
 ```bash
-python scripts/build_index.py \
-    --data examples/self_published_papers/papers.json \
-    --citations examples/self_published_papers/citations.json \
-    --output retriever_state.json
+pytest tests/ -v
+# 141 passed ✅
 ```
 
-#### 2. Interactive Query
+---
 
-```bash
-python scripts/query_demo.py --index retriever_state.json
-```
+*For v1 (legacy) architecture, see the [`v1` branch](https://github.com/yuyang-rgb094/tensor-manifold-gvf/tree/v1).*
 
-Available commands in the interactive REPL:
-- `text <query>` -- Text-based retrieval
-- `node <id>` -- Node-based retrieval with full decomposition
-- `top [k]` -- Show top-k results from last query
-- `format <fmt>` -- Switch output format (table / markdown / detailed)
-- `save <path>` -- Save results to JSON
-- `stats` -- Show index statistics
-- `quit` -- Exit
+---
 
-#### 3. Incremental Update
+<a id="original-paper"></a>
 
-```bash
-python scripts/incremental_update.py \
-    --index retriever_state.json \
-    --new-data new_papers.json \
-    --new-citations new_citations.json \
-    --output updated_retriever.json
-```
+---
 
-#### 4. Benchmark
+## Original Paper Description
 
-```bash
-python scripts/benchmark.py \
-    --data examples/self_published_papers/papers.json \
-    --citations examples/self_published_papers/citations.json \
-    --iterations 100 \
-    --output benchmark_results.json
-```
+> 📄 **Paper**: [Tensor Manifold-Based Graph-Vector Fusion for AI-Native Academic Literature Retrieval](https://arxiv.org/abs/2604.16416) (arXiv:2604.16416)
 
-### Python API
+This is a Python implementation of the **Tensor Manifold-Based Graph-Vector Fusion** framework for AI-native academic literature retrieval, based on the theoretical foundation that academic literature graphs are discrete projections of tensor manifolds. This project unifies text vectors and graph topology into the same geometric space, supporting heterogeneous node types (papers, authors, journals, institutions, disciplines, projects) and multiple edge types (citations, collaborations, affiliations).
 
-```python
-from retrieval import UnifiedRetriever, ResultFormatter
+### Core Algorithms
 
-# Build retriever
-retriever = UnifiedRetriever(
-    sbert_model="all-MiniLM-L6-v2",
-    manifold_dim=64,
-    index_type="faiss",
-    decomposer_type="cp",
-    rank=8,
-)
-
-retriever.build(documents, relations=citations)
-
-# Text search
-results = retriever.search("graph neural network", top_k=10)
-print(ResultFormatter.to_markdown(results))
-
-# Node search with decomposition
-results, decomp = retriever.search_with_decomposition("paper_001", top_k=5)
-if decomp:
-    print(f"Explained variance: {decomp.explained_variance_ratio:.4f}")
-    print(f"Aspect contributions: {decomp.aspect_contributions}")
-
-# Incremental update
-stats = retriever.incremental_update(new_documents, new_relations=new_relations)
-print(f"Added {stats['n_added']} docs in {stats['update_time_s']}s")
-
-# Save / Load
-retriever.to_json("index.json")
-retriever = UnifiedRetriever.from_json("index.json")
-```
-
-### Algorithm Descriptions
-
-#### Algorithm 1: Tensor Signature Construction
-
-For each document *d* in the knowledge graph, construct a third-order tensor
-T_d in R^{n_e x n_r x d} where n_e is the number of entities, n_r is the
-number of relation types, and d is the embedding dimension. Entities are
-extracted from author names, keywords, and venue. Each relation slice
-encodes the connectivity pattern for a specific relation type.
-
-#### Algorithm 2: Grassmann Vector Field Retrieval
-
-1. Encode the query text using SBERT to obtain a dense vector q
-2. Project q onto the Grassmann manifold Gr(k, d) via orthonormalization
-3. Define a vector field V on the manifold that points toward semantically
-   similar documents
-4. Follow the vector field to retrieve the top-k nearest neighbors
-5. Re-rank results using aspect-weighted scores from decomposition
-
-#### Algorithm 3: Incremental Manifold Update
-
-When new documents arrive:
-1. Encode new documents with SBERT
-2. Build tensor signatures for new entries
-3. Project new signatures onto the existing manifold
-4. Compute the Grassmannian mean shift: blend old and new means with
-   weight alpha = n_new / (n_old + n_new)
-5. Shift existing embeddings toward the updated mean
-6. Extend the similarity index with new manifold embeddings
-
-#### Tensor Decomposition
-
-The system supports two decomposition methods:
-
-- **CP Decomposition**: Factorizes the tensor into a sum of rank-one tensors,
-  providing interpretable aspect contributions for each relation type.
-- **Tucker Decomposition**: Factorizes the tensor into a core tensor and
-  factor matrices along each mode, capturing multi-way interactions.
-
-Decomposition results include explained variance ratio, reconstruction error,
-and per-aspect contribution weights.
-
-### OAG Format Support
-
-The system supports loading data in Open Academic Graph (OAG) format. Documents
-should be JSON files containing records with the following fields (field name
-aliases are supported):
-
-| Field | Aliases | Description |
-|-------|---------|-------------|
-| `id` | `paper_id` | Unique paper identifier |
-| `title` | `name` | Paper title |
-| `abstract` | `summary` | Paper abstract |
-| `year` | `pub_year` | Publication year |
-| `authors` | `author_names` | List of author names |
-| `venue` | `journal`, `conference` | Publication venue |
-| `keywords` | `tags`, `concepts` | List of keywords |
-
-Citation files should contain entries with `source` (or `citing`) and `target`
-(or `cited`) fields specifying citation relationships.
+- **Tensor Signature Construction**: Builds third-order tensors from entity-relation triples
+- **Grassmann Vector Field Retrieval**: Projects queries onto Grassmann manifold for geometric search
+- **Incremental Manifold Update**: Updates index with new documents without full rebuild
+- **Tensor Decomposition**: CP and Tucker decomposition for multi-aspect analysis
 
 ### License
 
-MIT License
+MIT License — see [LICENSE](LICENSE)
 
 ---
 
 <a id="中文"></a>
 
-## 张量流形图向量融合 (TMGVF)
+## 张量流形图向量融合 (TMGVF) v2.0
 
-基于论文 [Tensor Manifold-Based Graph-Vector Fusion for AI-Native Academic Literature Retrieval](https://arxiv.org/abs/2604.16416) (arXiv:2604.16416) 的 Python 实现。基于学术文献图是张量流形的离散投影这一理论基础，将文本向量和图拓扑统一到同一几何空间，支持论文、作者、期刊、机构、领域、项目等多类型异构节点，以及引用、合作、隶属等多种边类型。
+> 📄 **论文**: [arXiv:2604.16416](https://arxiv.org/abs/2604.16416)
 
-### 特性
+### v2.0 主要升级
 
-- **张量签名构建（算法 1）**：从知识图谱中的实体-关系三元组构建三阶张量
-- **Grassmann 向量场检索（算法 2）**：将查询投影到 Grassmann 流形上进行几何感知的相似度搜索
-- **增量流形更新（算法 3）**：高效更新索引，无需全量重建
-- **张量分解**：支持 CP 和 Tucker 分解，用于多维度检索与分析
-- **多种索引后端**：FAISS、HNSWLIB 和暴力相似度搜索
-- **OAG 格式支持**：兼容开放学术图谱数据格式
-- **灵活输出**：JSON、纯文本表格、Markdown 和详细报告
-
-### 依赖
-
-```
-numpy>=1.20.0
-sentence-transformers>=2.0.0   # 可选；未安装时使用随机嵌入
-faiss-cpu>=1.7.0               # 可选；未安装时使用暴力搜索
-hnswlib>=0.7.0                 # 可选；未安装时使用暴力搜索
-pyyaml>=6.0                    # 可选；用于 YAML 配置文件
-```
-
-### 项目结构
-
-```
-tensor_manifold_gvf/
-├── retrieval/
-│   ├── __init__.py              # 模块导出
-│   ├── retriever.py             # UnifiedRetriever, RetrievalResult
-│   └── result_formatter.py      # ResultFormatter (JSON/表格/Markdown/详细)
-├── scripts/
-│   ├── build_index.py           # 从数据构建检索索引
-│   ├── query_demo.py            # 交互式查询 REPL
-│   ├── incremental_update.py    # 增量更新与验证
-│   └── benchmark.py             # 性能基准测试
-├── tests/
-│   └── __init__.py
-├── examples/
-│   └── self_published_papers/
-│       ├── papers.json          # 10 篇示例学术论文
-│       └── citations.json       # 19 条引用关系
-└── README.md
-```
+| 问题 | v1 | v2.0 |
+|------|-----|------|
+| **语义稀释** | Abstract 占向量 1/2~2/3 | 四通道独立编码 + 交叉注意力融合 |
+| **固定通道权重** | 所有任务用同一套权重 | 任务特定注意力头 + 可学习权重 |
+| **内存索引** | FAISS/HNSWLIB 仅内存 | Qdrant Named Vectors 持久化存储 |
 
 ### 快速开始
 
-#### 1. 构建索引
+```bash
+# 安装
+pip install -e .
+
+# 启动 Qdrant (可选)
+docker compose up -d
+
+# 启动 Knowledge API
+uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+API 文档: http://localhost:8000/docs
+
+### 依赖安装
 
 ```bash
-python scripts/build_index.py \
-    --data examples/self_published_papers/papers.json \
-    --citations examples/self_published_papers/citations.json \
-    --output retriever_state.json
+# 基础依赖
+pip install -e .
+
+# 四通道编码器 (可选，有自动降级)
+pip install "FlagEmbedding>=1.2.0" "torch_geometric>=2.5.0"
+
+# 向量存储 (可选)
+pip install "qdrant-client>=1.7.0"
+
+# Knowledge API (可选)
+pip install "fastapi>=0.104.0" "uvicorn[standard]>=0.24.0"
 ```
 
-#### 2. 交互式查询
+### 下一步开发
 
-```bash
-python scripts/query_demo.py --index retriever_state.json
-```
+详见 [docs/ROADMAP.md](docs/ROADMAP.md) — 包含 P2 功能开发指引和社区贡献指南。
 
-交互式 REPL 支持的命令：
-- `text <查询>` -- 文本检索
-- `node <ID>` -- 节点检索（含完整分解）
-- `top [k]` -- 显示上次查询的前 k 个结果
-- `format <格式>` -- 切换输出格式（table / markdown / detailed）
-- `save <路径>` -- 保存结果到 JSON
-- `stats` -- 显示索引统计信息
-- `quit` -- 退出
+---
 
-#### 3. 增量更新
-
-```bash
-python scripts/incremental_update.py \
-    --index retriever_state.json \
-    --new-data new_papers.json \
-    --new-citations new_citations.json \
-    --output updated_retriever.json
-```
-
-#### 4. 性能测试
-
-```bash
-python scripts/benchmark.py \
-    --data examples/self_published_papers/papers.json \
-    --citations examples/self_published_papers/citations.json \
-    --iterations 100 \
-    --output benchmark_results.json
-```
-
-### Python API 示例
-
-```python
-from retrieval import UnifiedRetriever, ResultFormatter
-
-# 构建检索器
-retriever = UnifiedRetriever(
-    sbert_model="all-MiniLM-L6-v2",
-    manifold_dim=64,
-    index_type="faiss",
-    decomposer_type="cp",
-    rank=8,
-)
-
-retriever.build(documents, relations=citations)
-
-# 文本搜索
-results = retriever.search("graph neural network", top_k=10)
-print(ResultFormatter.to_markdown(results))
-
-# 节点搜索与分解
-results, decomp = retriever.search_with_decomposition("paper_001", top_k=5)
-if decomp:
-    print(f"解释方差比: {decomp.explained_variance_ratio:.4f}")
-    print(f"维度贡献: {decomp.aspect_contributions}")
-
-# 增量更新
-stats = retriever.incremental_update(new_documents, new_relations=new_relations)
-print(f"新增 {stats['n_added']} 篇文档，耗时 {stats['update_time_s']}s")
-
-# 保存 / 加载
-retriever.to_json("index.json")
-retriever = UnifiedRetriever.from_json("index.json")
-```
-
-### 算法说明
-
-#### 算法 1：张量签名构建
-
-对知识图谱中的每个文档 d，构建三阶张量 T_d 属于 R^{n_e x n_r x d}，
-其中 n_e 为实体数量，n_r 为关系类型数量，d 为嵌入维度。实体从作者名、
-关键词和发表场所中提取。每个关系切片编码特定关系类型的连接模式。
-
-#### 算法 2：Grassmann 向量场检索
-
-1. 使用 SBERT 编码查询文本，获得稠密向量 q
-2. 通过正交化将 q 投影到 Grassmann 流形 Gr(k, d)
-3. 在流形上定义向量场 V，指向语义相似的文档
-4. 沿向量场检索 top-k 近邻
-5. 使用分解得到的维度权重对结果进行重排序
-
-#### 算法 3：增量流形更新
-
-当新文档到达时：
-1. 使用 SBERT 编码新文档
-2. 为新条目构建张量签名
-3. 将新签名投影到现有流形上
-4. 计算 Grassmann 均值漂移：以 alpha = n_new / (n_old + n_new) 混合新旧均值
-5. 将现有嵌入向更新后的均值方向偏移
-6. 使用新流形嵌入扩展相似度索引
-
-#### 张量分解
-
-系统支持两种分解方法：
-
-- **CP 分解**：将张量分解为一秩张量之和，提供每种关系类型的可解释维度贡献
-- **Tucker 分解**：将张量分解为核心张量和各模式因子矩阵，捕获多路交互
-
-分解结果包括解释方差比、重建误差和各维度贡献权重。
-
-### OAG 格式支持
-
-系统支持加载开放学术图谱 (OAG) 格式的数据。文档应为 JSON 文件，包含以下字段（支持字段别名）：
-
-| 字段 | 别名 | 说明 |
-|------|------|------|
-| `id` | `paper_id` | 唯一论文标识符 |
-| `title` | `name` | 论文标题 |
-| `abstract` | `summary` | 论文摘要 |
-| `year` | `pub_year` | 发表年份 |
-| `authors` | `author_names` | 作者列表 |
-| `venue` | `journal`, `conference` | 发表场所 |
-| `keywords` | `tags`, `concepts` | 关键词列表 |
-
-引用文件应包含 `source`（或 `citing`）和 `target`（或 `cited`）字段，指定引用关系。
-
-### 许可证
-
-MIT License
+*License: MIT — Copyright (c) 2026 yuyang-rgb094*

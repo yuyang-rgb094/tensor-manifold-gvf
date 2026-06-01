@@ -25,11 +25,23 @@ from typing import Any, Dict
 from .base import EmbeddingEncoder
 from .sentence_transformer_encoder import SentenceTransformerEncoder
 
+# Lazy import for BGE-M3 adapter (avoids hard dependency on FlagEmbedding)
+_BGE_M3_AVAILABLE = False
+try:
+    from FlagEmbedding import BGEM3FlagModel  # noqa: F401
+    _BGE_M3_AVAILABLE = True
+except ImportError:
+    pass
+
 __all__ = [
     "EmbeddingEncoder",
     "SentenceTransformerEncoder",
     "create_encoder",
 ]
+
+if _BGE_M3_AVAILABLE:
+    from .bge_m3_encoder import BGEM3Encoder
+    __all__.append("BGEM3Encoder")
 
 logger = logging.getLogger("tensor_manifold_gvf.encoders")
 
@@ -38,6 +50,10 @@ _ENCODER_REGISTRY: Dict[str, type] = {
     "sentence_transformer": SentenceTransformerEncoder,
     "sbert": SentenceTransformerEncoder,
 }
+
+if _BGE_M3_AVAILABLE:
+    from .bge_m3_encoder import BGEM3Encoder
+    _ENCODER_REGISTRY["bge_m3"] = BGEM3Encoder
 
 
 def create_encoder(config: Dict[str, Any]) -> EmbeddingEncoder:

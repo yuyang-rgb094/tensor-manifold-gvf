@@ -59,3 +59,54 @@ signature:
 data:
   node_types: ["paper", "author", "journal", "discipline", "institution", "project"]
   edge_types: ["citation", "collaboration", "affiliation", "publishes_in", "belongs_to", "works_on", "funded_by"]
+
+# ============================================================
+# Four-Channel Encoder Configuration (v2)
+# Set channels.enabled: true to activate four-channel mode.
+# When disabled (default), the system uses the v1 single-encoder pipeline.
+# ============================================================
+channels:
+  enabled: false
+
+  semantic:
+    type: "bge_m3"                # "bge_m3" | "sentence_transformer"
+    model_name: "BAAI/bge-m3"
+    batch_size: 12
+    use_fp16: true
+    use_cache: true
+    device: "cpu"
+    fallback_to_sbert: true      # fall back to SBERT when BGE-M3 unavailable
+
+  metadata:
+    output_dim: 256
+    author_vocab_size: 100000
+    venue_vocab_size: 50000
+    share_semantic_encoder: true  # reuse semantic channel's BGE-M3 for keywords
+    keyword_dim: 1024
+    author_embed_dim: 128
+    venue_embed_dim: 128
+
+  topology:
+    input_dim: 1024               # node initial feature dim (BGE-M3 dense)
+    hidden_dim: 256
+    output_dim: 256
+    num_layers: 2
+    num_neighbors: 10
+    edge_types: ["citation", "collaboration"]
+    dropout: 0.3
+    use_diffusion_signatures: false
+
+  temporal:
+    output_dim: 64
+    n_periodic: 32
+    year_vocab_size: 200           # 1900-2100
+    month_vocab_size: 13          # 1-12 + padding
+    year_embed_dim: 16
+    month_embed_dim: 8
+
+  fusion:
+    hidden_dim: 256
+    output_dim: 128                # final manifold embedding dimension
+    num_relations: 4
+    num_attention_heads: 4
+    dropout: 0.1

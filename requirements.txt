@@ -11,4 +11,17 @@ tqdm>=4.66.0
 
 # Optional dependencies
 hnswlib>=0.7.0              # hnswlib index backend
-# FlagEmbedding>=1.2.0      # BGE-M3 encoder (Chinese/multilingual support)
+
+# Four-channel optional dependencies
+# Install with: pip install -e ".[channels]"
+FlagEmbedding>=1.2.0          # BGE-M3 semantic channel (multilingual)
+torch_geometric>=2.5.0       # GraphSAGE topology channel
+
+# Vector store
+qdrant-client>=1.7.0        # Qdrant named vector storage
+
+# Knowledge API service (ADR-0005)
+fastapi>=0.104.0            # REST API framework
+uvicorn[standard]>=0.24.0   # ASGI server
+pydantic>=2.5.0             # Data validation
+python-multipart>=0.0.6     # Form data parsing
